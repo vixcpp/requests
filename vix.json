@@ -1,0 +1,26 @@
+{
+  "name": "requests",
+  "namespace": "vix",
+  "version": "0.1.0",
+  "type": "header-only",
+  "include": "include/vix",
+  "license": "MIT",
+  "description": "HTTP for C++",
+  "keywords": [
+    "cpp",
+    "http",
+    "requests",
+    "client",
+    "network",
+    "api",
+    "header-only",
+    "vix"
+  ],
+  "repository": "https://github.com/vixcpp/requests",
+  "authors": [
+    {
+      "name": "Gaspard Kirira",
+      "github": "Gaspardkirira"
+    }
+  ]
+}
