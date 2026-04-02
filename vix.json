@@ -1,9 +1,9 @@
 {
   "name": "requests",
   "namespace": "vix",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "header-only",
-  "include": "include/vix",
+  "include": "include",
   "license": "MIT",
   "description": "HTTP for C++",
   "keywords": [
