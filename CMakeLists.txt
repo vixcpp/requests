@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(requests VERSION 0.1.0 LANGUAGES CXX)
+project(requests VERSION 0.1.2 LANGUAGES CXX)
 
 add_library(requests INTERFACE)
 add_library(requests::requests ALIAS requests)
