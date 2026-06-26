@@ -91,6 +91,7 @@ set(VIX_REQUESTS_SOURCES
   src/http/CookieJar.cpp
 
   src/transport/TcpTransport.cpp
+  src/transport/HttpsTransport.cpp
   src/transport/TransportFactory.cpp
 )
 
@@ -118,7 +119,15 @@ if(NOT TARGET vix::async)
   find_package(async CONFIG REQUIRED)
 endif()
 
-target_link_libraries(vix_requests PUBLIC vix::async)
+find_package(OpenSSL REQUIRED)
+
+target_link_libraries(vix_requests
+  PUBLIC
+    vix::async
+  PRIVATE
+    OpenSSL::SSL
+    OpenSSL::Crypto
+)
 
 set_target_properties(vix_requests PROPERTIES
   OUTPUT_NAME vix_requests
@@ -304,7 +313,7 @@ endif()
 message(STATUS "------------------------------------------------------")
 message(STATUS "vix::requests configured (${VIX_REQUESTS_MODULE_VERSION})")
 message(STATUS "Mode: STATIC")
-message(STATUS "HTTPS transport: not available yet")
+message(STATUS "HTTPS transport: OpenSSL")
 message(STATUS "Include dir: ${CMAKE_CURRENT_SOURCE_DIR}/include")
 message(STATUS "Internal dir: ${CMAKE_CURRENT_SOURCE_DIR}/src")
 message(STATUS "Build tests: ${VIX_REQUESTS_BUILD_TESTS}")

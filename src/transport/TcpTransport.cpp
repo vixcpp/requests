@@ -158,13 +158,13 @@ namespace vix::requests::transport
 
     core::task<void> drive_sync(
         core::io_context &ctx,
-        core::task<Response> &task,
+        core::task<Response> task,
         Response &response,
         std::exception_ptr &error)
     {
       try
       {
-        response = co_await task;
+        response = co_await std::move(task);
       }
       catch (...)
       {
@@ -203,7 +203,7 @@ namespace vix::requests::transport
           auto writeSomeTask = stream.async_write(
               std::span<const std::byte>(ptr, remaining),
               useTimeout ? source.token() : core::cancel_token{});
-          const std::size_t written = co_await writeSomeTask;
+          const std::size_t written = co_await std::move(writeSomeTask);
 
           if (useTimeout && deadline_expired(started, timeout.read()))
           {
@@ -244,8 +244,11 @@ namespace vix::requests::transport
     std::exception_ptr error;
     Response response;
 
-    auto pending = async_send(ctx, request);
-    auto runner = drive_sync(ctx, pending, response, error);
+    auto runner = drive_sync(
+        ctx,
+        async_send(ctx, request),
+        response,
+        error);
 
     ctx.post(runner.handle());
     ctx.run();
@@ -277,7 +280,7 @@ namespace vix::requests::transport
         *stream,
         request.final_url(),
         request.options().timeout);
-    co_await connectTask;
+    co_await std::move(connectTask);
 
     const http::SerializedRequest serialized =
         http::serialize_request(request);
@@ -287,13 +290,13 @@ namespace vix::requests::transport
         *stream,
         serialized.data,
         request.options().timeout);
-    co_await writeTask;
+    co_await std::move(writeTask);
 
     auto readTask = read_response_bytes(
         ctx,
         *stream,
         request);
-    std::string rawResponse = co_await readTask;
+    std::string rawResponse = co_await std::move(readTask);
 
     stream->close();
 
@@ -341,7 +344,7 @@ namespace vix::requests::transport
       auto connectTask = stream.async_connect(
           net::tcp_endpoint{url.host(), url.port()},
           useTimeout ? source.token() : core::cancel_token{});
-      co_await connectTask;
+      co_await std::move(connectTask);
 
       if (useTimeout && deadline_expired(started, timeout.connect()))
       {
@@ -392,7 +395,7 @@ namespace vix::requests::transport
         auto readSomeTask = stream.async_read(
             std::span<std::byte>(buffer.data(), buffer.size()),
             useTimeout ? source.token() : core::cancel_token{});
-        bytes = co_await readSomeTask;
+        bytes = co_await std::move(readSomeTask);
 
         if (useTimeout && deadline_expired(started, request.options().timeout.read()))
         {

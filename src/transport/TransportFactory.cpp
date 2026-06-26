@@ -21,6 +21,7 @@
 
 #include "detail/CaseInsensitive.hpp"
 #include "transport/TcpTransport.hpp"
+#include "transport/HttpsTransport.hpp"
 
 #include <memory>
 #include <sstream>
@@ -39,11 +40,6 @@ namespace vix::requests::transport
       if (!scheme.empty())
       {
         oss << ": " << scheme;
-      }
-
-      if (detail::ascii_iequals(scheme, "https"))
-      {
-        oss << " (HTTPS transport is not available in this build)";
       }
 
       return oss.str();
@@ -91,8 +87,7 @@ namespace vix::requests::transport
       return std::make_unique<TcpTransport>();
 
     case TransportProtocol::Https:
-      throw UnsupportedProtocolException(
-          "HTTPS transport is not available in this build");
+      return std::make_unique<HttpsTransport>();
     }
 
     throw UnsupportedProtocolException("unsupported transport protocol");
@@ -107,7 +102,8 @@ namespace vix::requests::transport
   bool scheme_supported(
       std::string_view scheme) noexcept
   {
-    return detail::ascii_iequals(scheme, "http");
+    return detail::ascii_iequals(scheme, "http") ||
+           detail::ascii_iequals(scheme, "https");
   }
 
   bool url_supported(const Url &url) noexcept

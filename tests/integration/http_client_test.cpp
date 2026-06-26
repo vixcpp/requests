@@ -22,6 +22,8 @@
 #include <vix/async/core/io_context.hpp>
 #include <vix/async/core/task.hpp>
 
+#include "transport/TransportFactory.hpp"
+
 #include <exception>
 #include <iostream>
 #include <stdexcept>
@@ -124,7 +126,6 @@ namespace
     expect(response.text() == R"({"ok":true})", "JSON response should match");
   }
 
-
   vix::async::core::task<void> run_async_get(
       vix::async::core::io_context &ctx,
       std::string url,
@@ -134,7 +135,7 @@ namespace
     try
     {
       auto requestTask = vix::requests::async_get(ctx, url);
-      response = co_await requestTask;
+      response = co_await std::move(requestTask);
     }
     catch (...)
     {
@@ -309,20 +310,11 @@ namespace
     expect(thrown, "raise_for_status should throw on 404");
   }
 
-  void test_unsupported_https()
+  void test_https_scheme_supported()
   {
-    bool thrown = false;
-
-    try
-    {
-      static_cast<void>(vix::requests::get("https://example.com/"));
-    }
-    catch (const vix::requests::UnsupportedProtocolException &)
-    {
-      thrown = true;
-    }
-
-    expect(thrown, "HTTPS should throw while TLS transport is unavailable");
+    expect(
+        vix::requests::transport::scheme_supported("https"),
+        "HTTPS should be supported");
   }
 }
 
@@ -337,7 +329,7 @@ int main()
     test_post_form();
     test_head_request();
     test_http_error_status();
-    test_unsupported_https();
+    test_https_scheme_supported();
 
     std::cout << "http_client_test passed\n";
     return 0;

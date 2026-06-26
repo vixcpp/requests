@@ -184,14 +184,13 @@ namespace
         },
         "ftp should throw UnsupportedProtocolException");
 
-    expect_throw<vix::requests::UnsupportedProtocolException>(
-        []
-        {
-          static_cast<void>(
-              vix::requests::transport::make_transport(
-                  vix::requests::transport::TransportProtocol::Https));
-        },
-        "HTTPS transport should throw while TLS backend is unavailable");
+    const auto httpsTransport =
+        vix::requests::transport::make_transport(
+            vix::requests::transport::TransportProtocol::Https);
+
+    expect(
+        httpsTransport->protocol() == vix::requests::transport::TransportProtocol::Https,
+        "HTTPS transport should be constructible");
   }
 
   void test_scheme_supported()
@@ -201,8 +200,8 @@ namespace
         "http should be supported");
 
     expect(
-        !vix::requests::transport::scheme_supported("https"),
-        "https should not be supported yet");
+        vix::requests::transport::scheme_supported("https"),
+        "https should be supported");
 
     expect(
         !vix::requests::transport::scheme_supported("ftp"),

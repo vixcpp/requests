@@ -9,7 +9,7 @@ It provides a Python `requests`-like API for C++:
 
 int main()
 {
-  auto response = vix::requests::get("http://example.com/");
+  auto response = vix::requests::get("https://example.com/");
 
   response.raise_for_status();
 
@@ -26,21 +26,13 @@ This module is designed for Vix.cpp `v2.7.0`.
 
 Current transport support:
 
-| Protocol | Status            |
-| -------- | ----------------- |
-| HTTP     | Supported         |
-| HTTPS    | Not supported yet |
+| Protocol | Status                    |
+| -------- | ------------------------- |
+| HTTP     | Supported                 |
+| HTTPS    | Supported with OpenSSL TLS |
 
-HTTPS is intentionally not faked.
+HTTPS uses the async module's Asio runtime and OpenSSL. TLS verification is enabled by default and can be disabled per request with `RequestOptions::verify_tls = false` for local development or test fixtures.
 The module does not use `curl`, `libcurl`, shell commands, `popen`, or temporary files.
-
-When HTTPS is requested, the client throws:
-
-```cpp
-vix::requests::UnsupportedProtocolException
-```
-
-The transport layer is abstracted so a TLS backend can be added later without changing the public API.
 
 ## Features
 
@@ -89,7 +81,7 @@ The transport layer is abstracted so a TLS backend can be added later without ch
 
 - `raise_for_status()`
 
-- No external dependency
+- OpenSSL for HTTPS
 
 - No curl
 
@@ -107,7 +99,7 @@ int main()
   try
   {
     const auto response =
-        vix::requests::get("http://example.com/");
+        vix::requests::get("https://example.com/");
 
     std::cout << response.status_code() << "\n";
     std::cout << response.reason() << "\n";
@@ -496,7 +488,7 @@ src/detail/
 
 ## Current limitations
 
-- HTTPS is not implemented yet.
+- HTTPS is implemented with OpenSSL and supports SNI plus hostname verification by default.
 - The current transport uses POSIX sockets.
 - Windows transport is not implemented yet.
 - No gzip or deflate decompression is advertised or faked.
