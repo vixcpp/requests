@@ -51,8 +51,6 @@ option(VIX_REQUESTS_ENABLE_LTO "Enable LTO in Release builds" OFF)
 option(VIX_REQUESTS_INSTALL "Enable standalone install/package rules" ON)
 
 if(DEFINED VIX_UMBRELLA_BUILD AND VIX_UMBRELLA_BUILD)
-  set(VIX_REQUESTS_BUILD_TESTS OFF CACHE BOOL "Build Vix Requests tests" FORCE)
-  set(VIX_REQUESTS_BUILD_EXAMPLES OFF CACHE BOOL "Build Vix Requests examples" FORCE)
   set(VIX_REQUESTS_INSTALL OFF CACHE BOOL "Enable standalone install/package rules" FORCE)
 endif()
 
@@ -63,14 +61,6 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-
-# ============================================================================
-# Platform
-# ============================================================================
-
-if(WIN32)
-  message(FATAL_ERROR "[requests] Windows transport is not implemented yet. Current transport uses POSIX sockets.")
-endif()
 
 # ============================================================================
 # Sources
@@ -100,8 +90,6 @@ set(VIX_REQUESTS_SOURCES
   src/http/RedirectPolicy.cpp
   src/http/CookieJar.cpp
 
-  src/transport/Socket.cpp
-  src/transport/Resolver.cpp
   src/transport/TcpTransport.cpp
   src/transport/TransportFactory.cpp
 )
@@ -125,6 +113,12 @@ target_include_directories(vix_requests
 )
 
 target_compile_features(vix_requests PUBLIC cxx_std_20)
+
+if(NOT TARGET vix::async)
+  find_package(async CONFIG REQUIRED)
+endif()
+
+target_link_libraries(vix_requests PUBLIC vix::async)
 
 set_target_properties(vix_requests PROPERTIES
   OUTPUT_NAME vix_requests
@@ -161,7 +155,7 @@ else()
 endif()
 
 if(TARGET vix_warnings)
-  target_link_libraries(vix_requests PRIVATE vix_warnings)
+  target_link_libraries(vix_requests PRIVATE $<BUILD_INTERFACE:vix_warnings>)
 endif()
 
 if(VIX_ENABLE_SANITIZERS AND TARGET vix_sanitizers)
@@ -237,7 +231,7 @@ endif()
 # Install for Vix umbrella export
 # ============================================================================
 
-if(DEFINED VIX_UMBRELLA_BUILD AND VIX_UMBRELLA_BUILD)
+if(DEFINED VIX_UMBRELLA_BUILD AND VIX_UMBRELLA_BUILD AND VIX_ENABLE_INSTALL)
   install(
     TARGETS vix_requests
     EXPORT VixTargets

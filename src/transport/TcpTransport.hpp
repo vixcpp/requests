@@ -21,10 +21,20 @@
 
 #include <vix/requests/transport/Transport.hpp>
 
-#include "transport/Socket.hpp"
+#include <vix/async/core/task.hpp>
 
 #include <cstddef>
 #include <string>
+
+namespace vix::async::core
+{
+  class io_context;
+}
+
+namespace vix::async::net
+{
+  class tcp_stream;
+}
 
 namespace vix::requests::transport
 {
@@ -49,6 +59,17 @@ namespace vix::requests::transport
      * @return HTTP response.
      */
     [[nodiscard]] Response send(const Request &request) override;
+
+    /**
+     * @brief Asynchronously sends one HTTP request through a TCP stream.
+     *
+     * @param ctx Async runtime context.
+     * @param request Prepared request.
+     * @return Task producing the HTTP response.
+     */
+    [[nodiscard]] vix::async::core::task<Response> async_send(
+        vix::async::core::io_context &ctx,
+        const Request &request) override;
 
     /**
      * @brief Checks whether this transport supports a URL.
@@ -78,7 +99,9 @@ namespace vix::requests::transport
      * @param timeout Timeout configuration.
      * @return Connected socket.
      */
-    [[nodiscard]] Socket connect(
+    [[nodiscard]] vix::async::core::task<void> connect(
+        vix::async::core::io_context &ctx,
+        vix::async::net::tcp_stream &stream,
         const Url &url,
         const Timeout &timeout) const;
 
@@ -89,8 +112,9 @@ namespace vix::requests::transport
      * @param request Request used to know body expectations.
      * @return Raw response bytes.
      */
-    [[nodiscard]] std::string read_response_bytes(
-        Socket &socket,
+    [[nodiscard]] vix::async::core::task<std::string> read_response_bytes(
+        vix::async::core::io_context &ctx,
+        vix::async::net::tcp_stream &stream,
         const Request &request) const;
 
     /**

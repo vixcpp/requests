@@ -18,20 +18,31 @@
 
 #include "transport/TcpTransport.hpp"
 #include <vix/requests/Error.hpp>
+#include <vix/async/core/cancel.hpp>
+#include <vix/async/core/io_context.hpp>
+#include <vix/async/core/timer.hpp>
+#include <vix/async/net/tcp.hpp>
 
 #include "http/HttpParser.hpp"
 #include "http/HttpSerializer.hpp"
-#include "transport/Resolver.hpp"
 
+#include <array>
 #include <chrono>
+#include <cstddef>
+#include <cstring>
 #include <exception>
+#include <span>
 #include <string>
+#include <system_error>
 #include <utility>
 
 namespace vix::requests::transport
 {
   namespace
   {
+    namespace core = vix::async::core;
+    namespace net = vix::async::net;
+
     [[nodiscard]] bool is_final_chunked_response(
         std::string_view body) noexcept
     {
@@ -110,9 +121,146 @@ namespace vix::requests::transport
 
       return false;
     }
+
+    [[nodiscard]] bool is_cancelled_error(const std::system_error &error)
+    {
+      return error.code() == core::cancelled_ec();
+    }
+
+    [[nodiscard]] bool deadline_expired(
+        std::chrono::steady_clock::time_point started,
+        Timeout::Duration duration)
+    {
+      return duration.count() > 0 &&
+             std::chrono::steady_clock::now() - started >= duration;
+    }
+
+    void schedule_timeout(
+        core::io_context &ctx,
+        net::tcp_stream &stream,
+        Timeout::Duration duration,
+        core::cancel_source source)
+    {
+      if (duration.count() <= 0)
+      {
+        return;
+      }
+
+      ctx.timers().after(
+          duration,
+          [&stream, source]() mutable
+          {
+            source.request_cancel();
+            stream.close();
+          },
+          source.token());
+    }
+
+    core::task<void> drive_sync(
+        core::io_context &ctx,
+        core::task<Response> &task,
+        Response &response,
+        std::exception_ptr &error)
+    {
+      try
+      {
+        response = co_await task;
+      }
+      catch (...)
+      {
+        error = std::current_exception();
+      }
+
+      ctx.stop();
+      co_return;
+    }
+
+    [[nodiscard]] core::task<void> async_write_all(
+        core::io_context &ctx,
+        net::tcp_stream &stream,
+        std::string_view data,
+        const Timeout &timeout)
+    {
+      core::cancel_source source;
+      const bool useTimeout = timeout.has_read();
+
+      if (useTimeout)
+      {
+        schedule_timeout(ctx, stream, timeout.read(), source);
+      }
+
+      std::size_t sent = 0;
+
+      try
+      {
+        while (sent < data.size())
+        {
+          const auto *ptr = reinterpret_cast<const std::byte *>(
+              data.data() + sent);
+          const std::size_t remaining = data.size() - sent;
+
+          const auto started = std::chrono::steady_clock::now();
+          auto writeSomeTask = stream.async_write(
+              std::span<const std::byte>(ptr, remaining),
+              useTimeout ? source.token() : core::cancel_token{});
+          const std::size_t written = co_await writeSomeTask;
+
+          if (useTimeout && deadline_expired(started, timeout.read()))
+          {
+            source.request_cancel();
+            stream.close();
+            throw TimeoutException("request write timed out");
+          }
+
+          if (written == 0U)
+          {
+            throw ConnectionException("socket closed while sending");
+          }
+
+          sent += written;
+        }
+      }
+      catch (const std::system_error &error)
+      {
+        const bool timedOut = useTimeout && source.is_cancelled();
+        source.request_cancel();
+
+        if (timedOut || is_cancelled_error(error))
+        {
+          throw TimeoutException("request write timed out");
+        }
+
+        throw TransportException(error.what());
+      }
+
+      source.request_cancel();
+      co_return;
+    }
   } // namespace
 
   Response TcpTransport::send(const Request &request)
+  {
+    core::io_context ctx;
+    std::exception_ptr error;
+    Response response;
+
+    auto pending = async_send(ctx, request);
+    auto runner = drive_sync(ctx, pending, response, error);
+
+    ctx.post(runner.handle());
+    ctx.run();
+
+    if (error)
+    {
+      std::rethrow_exception(error);
+    }
+
+    return response;
+  }
+
+  core::task<Response> TcpTransport::async_send(
+      core::io_context &ctx,
+      const Request &request)
   {
     if (!supports(request.final_url()))
     {
@@ -122,18 +270,32 @@ namespace vix::requests::transport
 
     const auto started = std::chrono::steady_clock::now();
 
-    Socket socket = connect(
+    auto stream = net::make_tcp_stream(ctx);
+
+    auto connectTask = connect(
+        ctx,
+        *stream,
         request.final_url(),
         request.options().timeout);
+    co_await connectTask;
 
     const http::SerializedRequest serialized =
         http::serialize_request(request);
 
-    socket.send_all(
+    auto writeTask = async_write_all(
+        ctx,
+        *stream,
         serialized.data,
         request.options().timeout);
+    co_await writeTask;
 
-    std::string rawResponse = read_response_bytes(socket, request);
+    auto readTask = read_response_bytes(
+        ctx,
+        *stream,
+        request);
+    std::string rawResponse = co_await readTask;
+
+    stream->close();
 
     Response response = http::parse_response(
         rawResponse,
@@ -146,7 +308,7 @@ namespace vix::requests::transport
         std::chrono::duration_cast<Response::Duration>(
             finished - started));
 
-    return response;
+    co_return response;
   }
 
   bool TcpTransport::supports(const Url &url) const noexcept
@@ -159,59 +321,111 @@ namespace vix::requests::transport
     return TransportProtocol::Http;
   }
 
-  Socket TcpTransport::connect(
+  core::task<void> TcpTransport::connect(
+      core::io_context &ctx,
+      net::tcp_stream &stream,
       const Url &url,
       const Timeout &timeout) const
   {
-    const ResolveResult resolved = resolve_tcp(url.host(), url.port());
+    core::cancel_source source;
+    const bool useTimeout = timeout.has_connect();
 
-    std::string lastError;
-
-    for (const ResolvedAddress &address : resolved.addresses())
+    if (useTimeout)
     {
-      try
-      {
-        Socket socket = Socket::tcp(address.family);
-
-        socket.connect(
-            &address.address,
-            address.addressLength,
-            timeout);
-
-        return socket;
-      }
-      catch (const RequestException &error)
-      {
-        lastError = error.what();
-      }
+      schedule_timeout(ctx, stream, timeout.connect(), source);
     }
 
-    if (!lastError.empty())
+    try
     {
-      throw ConnectionException(lastError);
+      const auto started = std::chrono::steady_clock::now();
+      auto connectTask = stream.async_connect(
+          net::tcp_endpoint{url.host(), url.port()},
+          useTimeout ? source.token() : core::cancel_token{});
+      co_await connectTask;
+
+      if (useTimeout && deadline_expired(started, timeout.connect()))
+      {
+        source.request_cancel();
+        stream.close();
+        throw TimeoutException("connection timed out");
+      }
+    }
+    catch (const std::system_error &error)
+    {
+      const bool timedOut = useTimeout && source.is_cancelled();
+      source.request_cancel();
+
+      if (timedOut || is_cancelled_error(error))
+      {
+        throw TimeoutException("connection timed out");
+      }
+
+      throw ConnectionException(error.what());
     }
 
-    throw ConnectionException("failed to connect socket");
+    source.request_cancel();
+    co_return;
   }
 
-  std::string TcpTransport::read_response_bytes(
-      Socket &socket,
+  core::task<std::string> TcpTransport::read_response_bytes(
+      core::io_context &ctx,
+      net::tcp_stream &stream,
       const Request &request) const
   {
     std::string data;
+    std::array<std::byte, readChunkSize> buffer{};
+    core::cancel_source source;
+    const bool useTimeout = request.options().timeout.has_read();
+
+    if (useTimeout)
+    {
+      schedule_timeout(ctx, stream, request.options().timeout.read(), source);
+    }
 
     while (true)
     {
-      std::string chunk = socket.receive(
-          readChunkSize,
-          request.options().timeout);
+      std::size_t bytes = 0;
 
-      if (chunk.empty())
+      try
+      {
+        const auto started = std::chrono::steady_clock::now();
+        auto readSomeTask = stream.async_read(
+            std::span<std::byte>(buffer.data(), buffer.size()),
+            useTimeout ? source.token() : core::cancel_token{});
+        bytes = co_await readSomeTask;
+
+        if (useTimeout && deadline_expired(started, request.options().timeout.read()))
+        {
+          source.request_cancel();
+          stream.close();
+          throw TimeoutException("request read timed out");
+        }
+      }
+      catch (const std::system_error &error)
+      {
+        const bool timedOut = useTimeout && source.is_cancelled();
+        source.request_cancel();
+
+        if (timedOut || is_cancelled_error(error))
+        {
+          throw TimeoutException("request read timed out");
+        }
+
+        if (!data.empty())
+        {
+          break;
+        }
+
+        throw ConnectionException(error.what());
+      }
+
+      if (bytes == 0U)
       {
         break;
       }
 
-      data += chunk;
+      const auto *chars = reinterpret_cast<const char *>(buffer.data());
+      data.append(chars, bytes);
 
       if (response_complete(data, request.expects_response_body()))
       {
@@ -219,12 +433,14 @@ namespace vix::requests::transport
       }
     }
 
+    source.request_cancel();
+
     if (data.empty())
     {
       throw ConnectionException("empty HTTP response");
     }
 
-    return data;
+    co_return data;
   }
 
   bool TcpTransport::response_complete(

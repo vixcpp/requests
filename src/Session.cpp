@@ -18,6 +18,7 @@
 
 #include <vix/requests/Session.hpp>
 #include <vix/requests/Error.hpp>
+#include <vix/async/core/io_context.hpp>
 
 #include "http/CookieJar.hpp"
 #include "http/RedirectPolicy.hpp"
@@ -47,7 +48,10 @@ namespace vix::requests
 
   namespace
   {
-    [[nodiscard]] Response send_once_with_cookies(
+    namespace core = vix::async::core;
+
+    [[nodiscard]] core::task<Response> send_once_with_cookies_async(
+        core::io_context &ctx,
         Request request,
         http::CookieJar &cookies)
     {
@@ -61,11 +65,50 @@ namespace vix::requests
       auto transport =
           transport::make_transport_for_url(request.final_url());
 
-      Response response = transport->send(request);
+      Response response = co_await transport->async_send(ctx, request);
 
       cookies.store_from_response(
           request.final_url(),
           response.headers());
+
+      co_return response;
+    }
+
+    core::task<void> drive_sync(
+        core::io_context &ctx,
+        core::task<Response> &task,
+        Response &response,
+        std::exception_ptr &error)
+    {
+      try
+      {
+        response = co_await task;
+      }
+      catch (...)
+      {
+        error = std::current_exception();
+      }
+
+      ctx.stop();
+      co_return;
+    }
+
+    [[nodiscard]] Response run_sync(
+        core::io_context &ctx,
+        core::task<Response> task)
+    {
+      Response response;
+      std::exception_ptr error;
+
+      auto runner = drive_sync(ctx, task, response, error);
+
+      ctx.post(runner.handle());
+      ctx.run();
+
+      if (error)
+      {
+        std::rethrow_exception(error);
+      }
 
       return response;
     }
@@ -180,6 +223,14 @@ namespace vix::requests
 
   Response Session::send(const Request &request)
   {
+    core::io_context ctx;
+    return run_sync(ctx, async_send(ctx, request));
+  }
+
+  core::task<Response> Session::async_send(
+      core::io_context &ctx,
+      const Request &request)
+  {
     RequestOptions mergedOptions = merge_request_options(
         runtime_->defaults,
         request.options());
@@ -209,9 +260,11 @@ namespace vix::requests
        */
       current.options().headers.remove("Cookie");
 
-      Response response = send_once_with_cookies(
+      auto responseTask = send_once_with_cookies_async(
+          ctx,
           current,
           runtime_->cookies);
+      Response response = co_await responseTask;
 
       const http::RedirectDecision decision =
           http::decide_redirect(
@@ -221,7 +274,7 @@ namespace vix::requests
 
       if (!decision.follow)
       {
-        return response;
+        co_return response;
       }
 
       current = http::make_redirect_request(current, decision);
@@ -318,6 +371,104 @@ namespace vix::requests
         Method::Head,
         url,
         std::move(options));
+  }
+
+  core::task<Response> Session::async_request(
+      core::io_context &ctx,
+      Method method,
+      std::string_view url,
+      RequestOptions options,
+      Body body)
+  {
+    auto pending = async_send(
+        ctx,
+        Request(method, url, std::move(options), std::move(body)));
+    co_return co_await pending;
+  }
+
+  core::task<Response> Session::async_request(
+      core::io_context &ctx,
+      std::string_view method,
+      std::string_view url,
+      RequestOptions options,
+      Body body)
+  {
+    auto pending = async_send(
+        ctx,
+        Request(method, url, std::move(options), std::move(body)));
+    co_return co_await pending;
+  }
+
+  core::task<Response> Session::async_get(
+      core::io_context &ctx,
+      std::string_view url,
+      RequestOptions options)
+  {
+    auto pending = async_request(ctx, Method::Get, url, std::move(options));
+    co_return co_await pending;
+  }
+
+  core::task<Response> Session::async_post(
+      core::io_context &ctx,
+      std::string_view url,
+      Body body,
+      RequestOptions options)
+  {
+    auto pending = async_request(
+        ctx,
+        Method::Post,
+        url,
+        std::move(options),
+        std::move(body));
+    co_return co_await pending;
+  }
+
+  core::task<Response> Session::async_put(
+      core::io_context &ctx,
+      std::string_view url,
+      Body body,
+      RequestOptions options)
+  {
+    auto pending = async_request(
+        ctx,
+        Method::Put,
+        url,
+        std::move(options),
+        std::move(body));
+    co_return co_await pending;
+  }
+
+  core::task<Response> Session::async_patch(
+      core::io_context &ctx,
+      std::string_view url,
+      Body body,
+      RequestOptions options)
+  {
+    auto pending = async_request(
+        ctx,
+        Method::Patch,
+        url,
+        std::move(options),
+        std::move(body));
+    co_return co_await pending;
+  }
+
+  core::task<Response> Session::async_del(
+      core::io_context &ctx,
+      std::string_view url,
+      RequestOptions options)
+  {
+    auto pending = async_request(ctx, Method::Delete, url, std::move(options));
+    co_return co_await pending;
+  }
+
+  core::task<Response> Session::async_head(
+      core::io_context &ctx,
+      std::string_view url,
+      RequestOptions options)
+  {
+    auto pending = async_request(ctx, Method::Head, url, std::move(options));
+    co_return co_await pending;
   }
 
 } // namespace vix::requests

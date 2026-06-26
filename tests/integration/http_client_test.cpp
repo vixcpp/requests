@@ -19,7 +19,10 @@
 #include "local_http_server.hpp"
 
 #include <vix/requests/requests.hpp>
+#include <vix/async/core/io_context.hpp>
+#include <vix/async/core/task.hpp>
 
+#include <exception>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -119,6 +122,61 @@ namespace
     expect(response.content_type() == "application/json",
            "Content-Type should be application/json");
     expect(response.text() == R"({"ok":true})", "JSON response should match");
+  }
+
+
+  vix::async::core::task<void> run_async_get(
+      vix::async::core::io_context &ctx,
+      std::string url,
+      vix::requests::Response &response,
+      std::exception_ptr &error)
+  {
+    try
+    {
+      auto requestTask = vix::requests::async_get(ctx, url);
+      response = co_await requestTask;
+    }
+    catch (...)
+    {
+      error = std::current_exception();
+    }
+
+    ctx.stop();
+    co_return;
+  }
+
+  void test_async_get()
+  {
+    vix::requests::tests::LocalHttpServer server(
+        [](const vix::requests::tests::LocalHttpRequest &request)
+        {
+          if (request.method == "GET" && request.path == "/async")
+          {
+            return vix::requests::tests::local_http_response(
+                200,
+                "async ok");
+          }
+
+          return vix::requests::tests::local_http_response(
+              404,
+              "not found");
+        });
+
+    vix::async::core::io_context ctx;
+    vix::requests::Response response;
+    std::exception_ptr error;
+
+    auto app = run_async_get(ctx, server.url("/async"), response, error);
+    ctx.post(app.handle());
+    ctx.run();
+
+    if (error)
+    {
+      std::rethrow_exception(error);
+    }
+
+    expect(response.status_code() == 200, "async GET status should be 200");
+    expect(response.text() == "async ok", "async GET body should match");
   }
 
   void test_post_json()
@@ -274,6 +332,7 @@ int main()
   {
     test_simple_get();
     test_get_with_params_and_headers();
+    test_async_get();
     test_post_json();
     test_post_form();
     test_head_request();

@@ -22,10 +22,16 @@
 #include <vix/requests/Request.hpp>
 #include <vix/requests/Response.hpp>
 #include <vix/requests/Url.hpp>
+#include <vix/async/core/task.hpp>
 
 #include <memory>
 #include <string>
 #include <string_view>
+
+namespace vix::async::core
+{
+  class io_context;
+}
 
 namespace vix::requests::transport
 {
@@ -98,6 +104,17 @@ namespace vix::requests::transport
      * @return HTTP response.
      */
     [[nodiscard]] virtual Response send(const Request &request) = 0;
+
+    /**
+     * @brief Asynchronously sends one prepared request.
+     *
+     * @param ctx Async runtime context.
+     * @param request Prepared request.
+     * @return Task producing the HTTP response.
+     */
+    [[nodiscard]] virtual vix::async::core::task<Response> async_send(
+        vix::async::core::io_context &ctx,
+        const Request &request) = 0;
 
     /**
      * @brief Returns true when this transport supports a URL.
