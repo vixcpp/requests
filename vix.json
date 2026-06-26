@@ -1,11 +1,11 @@
 {
   "name": "requests",
   "namespace": "vix",
-  "version": "0.1.2",
-  "type": "header-only",
+  "version": "1.0.0",
+  "type": "static",
   "include": "include",
   "license": "MIT",
-  "description": "HTTP for C++",
+  "description": "Simple HTTP requests module for Vix.cpp",
   "keywords": [
     "cpp",
     "http",
@@ -13,8 +13,8 @@
     "client",
     "network",
     "api",
-    "header-only",
-    "vix"
+    "vix",
+    "vixcpp"
   ],
   "repository": "https://github.com/vixcpp/requests",
   "authors": [

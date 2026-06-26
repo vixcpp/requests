@@ -1,221 +1,508 @@
-# vix/requests
+# Vix Requests
 
-HTTP for C++.
+`vix::requests` is a simple HTTP client module for Vix.cpp.
 
-**Header-only. Simple. Expressive.**
-
----
-
-## Download
-
-https://vixcpp.com/registry/pkg/vix/requests
-
----
-
-## Overview
-
-`vix/requests` provides a simple and expressive API to perform HTTP requests in C++.
-
-It supports:
-
-- GET, POST, PUT, PATCH, DELETE
-- headers
-- query parameters
-- JSON body
-- form data
-- sessions
-
-It is designed to be:
-
-- minimal
-- predictable
-- easy to use
-- quick to integrate
-
----
-
-## Why vix/requests?
-
-Performing HTTP requests in C++ is often:
-
-- verbose
-- complex
-- hard to read
-- tightly coupled to low-level networking
-
-This leads to:
-
-- boilerplate code
-- poor readability
-- slow development
-
-`vix/requests` provides:
-
-- a clean API
-- simple request construction
-- readable code
-
----
-
-## Installation
-
-### Using Vix
-
-```bash
-vix add @vix/requests
-vix install
-```
-
-### Manual
-
-```bash
-git clone https://github.com/vixcpp/requests.git
-```
-
-Add `include/` to your project.
-
----
-
-## Requirements
-
-- `curl` must be available on the system
-
----
-
-## Basic Usage
+It provides a Python `requests`-like API for C++:
 
 ```cpp
 #include <vix/requests/requests.hpp>
+
+int main()
+{
+  auto response = vix::requests::get("http://example.com/");
+
+  response.raise_for_status();
+
+  std::cout << response.status_code() << "\n";
+  std::cout << response.text() << "\n";
+}
+```
+
+## Status
+
+Version: `1.0.0`
+
+This module is designed for Vix.cpp `v2.7.0`.
+
+Current transport support:
+
+| Protocol | Status            |
+| -------- | ----------------- |
+| HTTP     | Supported         |
+| HTTPS    | Not supported yet |
+
+HTTPS is intentionally not faked.
+The module does not use `curl`, `libcurl`, shell commands, `popen`, or temporary files.
+
+When HTTPS is requested, the client throws:
+
+```cpp
+vix::requests::UnsupportedProtocolException
+```
+
+The transport layer is abstracted so a TLS backend can be added later without changing the public API.
+
+## Features
+
+- Simple free functions:
+  - `get`
+  - `post`
+  - `put`
+  - `patch`
+  - `del`
+  - `head`
+  - `request`
+
+- `Client` API
+
+- `Session` API
+
+- Headers with case-insensitive lookup
+
+- Query params with URL encoding
+
+- Raw body
+
+- JSON body
+
+- Form URL encoded body
+
+- Binary body
+
+- Basic auth
+
+- Redirect handling
+
+- Redirect loop detection
+
+- Configurable max redirects
+
+- Timeouts
+
+- Response parsing
+
+- `Content-Length`
+
+- `Transfer-Encoding: chunked`
+
+- Connection-close body
+
+- `raise_for_status()`
+
+- No external dependency
+
+- No curl
+
+- No shell command execution
+
+## Quick start
+
+```cpp
+#include <vix/requests/requests.hpp>
+
 #include <iostream>
 
 int main()
 {
-  auto res = vix::requests::get("https://httpbin.org/get");
+  try
+  {
+    const auto response =
+        vix::requests::get("http://example.com/");
 
-  std::cout << res.status_code << '\n';
-  std::cout << res.text << '\n';
+    std::cout << response.status_code() << "\n";
+    std::cout << response.reason() << "\n";
+    std::cout << response.text() << "\n";
+
+    response.raise_for_status();
+
+    return 0;
+  }
+  catch (const vix::requests::RequestException &error)
+  {
+    std::cerr << "request error: " << error.what() << "\n";
+    return 1;
+  }
 }
 ```
 
----
-
-## Query Parameters
+## GET with params and headers
 
 ```cpp
-vix::requests::RequestOptions options;
-options.params = {
-  {"q", "vix"},
-  {"page", "1"}
-};
+#include <vix/requests/requests.hpp>
 
-auto res = vix::requests::get("https://httpbin.org/get", options);
-```
+#include <chrono>
+#include <iostream>
 
----
-
-## POST Request
-
-```cpp
-vix::requests::RequestOptions options;
-options.body = "name=Gaspard&role=builder";
-options.headers["Content-Type"] = "application/x-www-form-urlencoded";
-
-auto res = vix::requests::post("https://httpbin.org/post", options);
-```
-
----
-
-## JSON Request
-
-```cpp
-vix::requests::RequestOptions options;
-options.json = R"({
-  "name": "Gaspard",
-  "project": "Vix"
-})";
-
-auto res = vix::requests::post("https://httpbin.org/post", options);
-```
-
----
-
-## Custom Headers
-
-```cpp
-vix::requests::RequestOptions options;
-options.headers["Authorization"] = "Bearer token";
-options.headers["Accept"] = "application/json";
-
-auto res = vix::requests::get("https://httpbin.org/get", options);
-```
-
----
-
-## Response
-
-```cpp
-if (res.ok())
+int main()
 {
-  std::cout << res.text << '\n';
-}
+  vix::requests::RequestOptions options;
 
-res.raise_for_status();
+  options.headers.set("Accept", "application/json");
+  options.params.set("page", "1");
+  options.params.set("q", "vix requests");
+  options.timeout = std::chrono::seconds(10);
+
+  const auto response =
+      vix::requests::get(
+          "http://example.com/search",
+          options);
+
+  std::cout << response.status_code() << "\n";
+  std::cout << response.text() << "\n";
+}
 ```
 
----
+## POST JSON
+
+```cpp
+#include <vix/requests/requests.hpp>
+
+#include <iostream>
+
+int main()
+{
+  vix::requests::RequestOptions options;
+  options.headers.set("Accept", "application/json");
+
+  const auto response =
+      vix::requests::post(
+          "http://127.0.0.1:8080/api/items",
+          vix::requests::json_body(R"({"name":"Vix"})"),
+          options);
+
+  std::cout << response.status_code() << "\n";
+  std::cout << response.text() << "\n";
+}
+```
+
+## POST form
+
+```cpp
+#include <vix/requests/requests.hpp>
+
+#include <iostream>
+
+int main()
+{
+  const auto response =
+      vix::requests::post(
+          "http://127.0.0.1:8080/login",
+          vix::requests::form_body({
+              {"username", "gaspard"},
+              {"project", "Vix Requests"}}));
+
+  std::cout << response.status_code() << "\n";
+  std::cout << response.text() << "\n";
+}
+```
 
 ## Session
 
+Use `Session` when multiple requests should share headers, params, auth, timeout, and cookies.
+
 ```cpp
-vix::requests::Session session;
+#include <vix/requests/requests.hpp>
 
-session.set_header("Accept", "application/json");
-session.defaults().timeout_seconds = 10;
+#include <chrono>
+#include <iostream>
 
-auto res = session.get("https://httpbin.org/get");
+int main()
+{
+  vix::requests::Session session;
+
+  session.headers().set("User-Agent", "vix-requests-example/1.0.0");
+  session.headers().set("Accept", "application/json");
+
+  session.params().set("token", "demo-token");
+  session.timeout() = std::chrono::seconds(10);
+
+  const auto profile =
+      session.get("http://127.0.0.1:8080/api/profile");
+
+  profile.raise_for_status();
+
+  std::cout << profile.text() << "\n";
+
+  const auto created =
+      session.post(
+          "http://127.0.0.1:8080/api/items",
+          vix::requests::form_body({
+              {"name", "Gaspard"},
+              {"project", "Vix Requests"}}));
+
+  created.raise_for_status();
+
+  std::cout << created.text() << "\n";
+}
 ```
 
----
+## Error handling
 
-## Execution Model
+```cpp
+try
+{
+  auto response =
+      vix::requests::get("http://example.com/missing");
 
-- requests are executed via system `curl`
-- response is fully buffered
-- headers and body are parsed after execution
+  response.raise_for_status();
+}
+catch (const vix::requests::InvalidUrlException &error)
+{
+  std::cerr << "invalid URL: " << error.what() << "\n";
+}
+catch (const vix::requests::UnsupportedProtocolException &error)
+{
+  std::cerr << "unsupported protocol: " << error.what() << "\n";
+}
+catch (const vix::requests::TimeoutException &error)
+{
+  std::cerr << "timeout: " << error.what() << "\n";
+}
+catch (const vix::requests::ConnectionException &error)
+{
+  std::cerr << "connection error: " << error.what() << "\n";
+}
+catch (const vix::requests::TooManyRedirectsException &error)
+{
+  std::cerr << "redirect error: " << error.what() << "\n";
+}
+catch (const vix::requests::HttpException &error)
+{
+  std::cerr << "HTTP error: "
+            << error.status_code()
+            << " "
+            << error.reason()
+            << "\n";
+}
+catch (const vix::requests::RequestException &error)
+{
+  std::cerr << "request error: " << error.what() << "\n";
+}
+```
 
----
+## Public API
 
-## Complexity
+Main include:
 
-| Operation | Complexity |
-|----------|-----------|
-| request creation | O(1) |
-| execution | O(n) |
-| response parsing | O(n) |
+```cpp
+#include <vix/requests/requests.hpp>
+```
 
----
+Main namespace:
 
-## Design Philosophy
+```cpp
+namespace vix::requests
+```
 
-- minimal API
-- explicit behavior
-- no hidden magic
-- composable options
-- header-only simplicity
+Important public types:
 
----
+```cpp
+vix::requests::Client
+vix::requests::Session
+vix::requests::Request
+vix::requests::Response
+vix::requests::RequestOptions
+vix::requests::Headers
+vix::requests::Params
+vix::requests::Body
+vix::requests::Timeout
+vix::requests::Url
+```
+
+## Request options
+
+```cpp
+vix::requests::RequestOptions options;
+
+options.headers.set("Accept", "application/json");
+options.params.set("page", "1");
+options.timeout = std::chrono::seconds(10);
+
+options.follow_redirects = true;
+options.max_redirects = 10;
+
+options.set_basic_auth("username", "password");
+options.set_user_agent("my-client/1.0");
+```
+
+## Response API
+
+```cpp
+response.status_code();
+response.reason();
+response.url();
+response.headers();
+response.header("Content-Type");
+response.content_type();
+response.content_length();
+response.location();
+response.text();
+response.body();
+response.bytes();
+response.size();
+response.empty();
+response.ok();
+response.is_redirect();
+response.is_error();
+response.raise_for_status();
+response.elapsed();
+```
+
+## Build
+
+Standalone:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+```
+
+With tests:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DVIX_REQUESTS_BUILD_TESTS=ON
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+With examples:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVIX_REQUESTS_BUILD_EXAMPLES=ON
+cmake --build build -j
+```
+
+## CMake target
+
+```cmake
+target_link_libraries(my_app PRIVATE vix::requests)
+```
+
+## CMake options
+
+| Option                        | Default | Description                             |
+| ----------------------------- | ------: | --------------------------------------- |
+| `VIX_REQUESTS_BUILD_TESTS`    |    `ON` | Build tests in standalone mode          |
+| `VIX_REQUESTS_BUILD_EXAMPLES` |    `ON` | Build examples in standalone mode       |
+| `VIX_REQUESTS_ENABLE_LTO`     |   `OFF` | Enable LTO in Release builds            |
+| `VIX_REQUESTS_INSTALL`        |    `ON` | Enable standalone install/package rules |
+
+Inside the Vix umbrella build, tests, examples, and standalone install rules are disabled by default.
 
 ## Tests
 
-```bash
-vix build
-vix test
+Unit tests:
+
+```txt
+tests/unit/url_test.cpp
+tests/unit/headers_test.cpp
+tests/unit/params_test.cpp
+tests/unit/body_test.cpp
+tests/unit/response_parser_test.cpp
+tests/unit/serializer_test.cpp
+tests/unit/session_test.cpp
+tests/unit/errors_test.cpp
 ```
 
----
+Integration tests:
+
+```txt
+tests/integration/http_client_test.cpp
+tests/integration/redirect_test.cpp
+tests/integration/timeout_test.cpp
+```
+
+Tests do not require external internet access.
+Integration tests use a local loopback HTTP server.
+
+## Examples
+
+```txt
+examples/simple_get.cpp
+examples/get_params.cpp
+examples/post_json.cpp
+examples/post_form.cpp
+examples/session.cpp
+examples/error_handling.cpp
+```
+
+## Design
+
+The module is organized as a real Vix module:
+
+```txt
+include/vix/requests/
+  requests.hpp
+  Client.hpp
+  Session.hpp
+  Request.hpp
+  Response.hpp
+  RequestOptions.hpp
+  Headers.hpp
+  Params.hpp
+  Method.hpp
+  Url.hpp
+  Body.hpp
+  Error.hpp
+  Timeout.hpp
+  Version.hpp
+
+include/vix/requests/transport/
+  Transport.hpp
+
+src/
+  Client.cpp
+  Session.cpp
+  Request.cpp
+  Response.cpp
+  RequestOptions.cpp
+  Headers.cpp
+  Params.cpp
+  Method.cpp
+  Url.cpp
+  Body.cpp
+  Error.cpp
+  Timeout.cpp
+  Version.cpp
+
+src/http/
+  HttpParser.hpp
+  HttpParser.cpp
+  HttpSerializer.hpp
+  HttpSerializer.cpp
+  RedirectPolicy.hpp
+  RedirectPolicy.cpp
+  CookieJar.hpp
+  CookieJar.cpp
+
+src/transport/
+  Socket.hpp
+  Socket.cpp
+  Resolver.hpp
+  Resolver.cpp
+  TcpTransport.hpp
+  TcpTransport.cpp
+  TransportFactory.hpp
+  TransportFactory.cpp
+
+src/detail/
+  Base64.hpp
+  Base64.cpp
+  UrlEncode.hpp
+  UrlEncode.cpp
+  CaseInsensitive.hpp
+  CaseInsensitive.cpp
+```
+
+## Current limitations
+
+- HTTPS is not implemented yet.
+- The current transport uses POSIX sockets.
+- Windows transport is not implemented yet.
+- No gzip or deflate decompression is advertised or faked.
+- HTTP proxy support is not implemented yet.
+- Connection reuse is prepared by design, but the current transport opens one connection per request.
 
 ## License
 
-MIT License
-Copyright (c) Gaspard Kirira
-
+MIT
