@@ -1,11 +1,13 @@
 # Vix Requests
 
-`vix::requests` is a simple HTTP client module for Vix.cpp.
+`vix::requests` is a lightweight HTTP client module for Vix.cpp.
 
 It provides a Python `requests`-like API for C++:
 
 ```cpp
 #include <vix/requests/requests.hpp>
+
+#include <iostream>
 
 int main()
 {
@@ -20,18 +22,25 @@ int main()
 
 ## Status
 
-Version: `1.0.0`
+Version: `1.2.0`
 
 This module is designed for Vix.cpp `v2.7.0`.
 
 Current transport support:
 
-| Protocol | Status                    |
-| -------- | ------------------------- |
-| HTTP     | Supported                 |
+| Protocol | Status                     |
+| -------- | -------------------------- |
+| HTTP     | Supported                  |
 | HTTPS    | Supported with OpenSSL TLS |
 
-HTTPS uses the async module's Asio runtime and OpenSSL. TLS verification is enabled by default and can be disabled per request with `RequestOptions::verify_tls = false` for local development or test fixtures.
+HTTPS is implemented with OpenSSL TLS. TLS verification is enabled by default and can be disabled per request with:
+
+```cpp
+options.verify_tls = false;
+```
+
+This is useful for local development, self-signed certificates, or test fixtures.
+
 The module does not use `curl`, `libcurl`, shell commands, `popen`, or temporary files.
 
 ## Features
@@ -117,6 +126,12 @@ int main()
 }
 ```
 
+Run it with Vix:
+
+```bash
+vix run examples/simple_get.cpp
+```
+
 ## GET with params and headers
 
 ```cpp
@@ -144,6 +159,12 @@ int main()
 }
 ```
 
+Run it:
+
+```bash
+vix run examples/get_params.cpp
+```
+
 ## POST JSON
 
 ```cpp
@@ -167,6 +188,12 @@ int main()
 }
 ```
 
+Run it:
+
+```bash
+vix run examples/post_json.cpp
+```
+
 ## POST form
 
 ```cpp
@@ -186,6 +213,12 @@ int main()
   std::cout << response.status_code() << "\n";
   std::cout << response.text() << "\n";
 }
+```
+
+Run it:
+
+```bash
+vix run examples/post_form.cpp
 ```
 
 ## Session
@@ -228,48 +261,67 @@ int main()
 }
 ```
 
+Run it:
+
+```bash
+vix run examples/session.cpp
+```
+
 ## Error handling
 
 ```cpp
-try
-{
-  auto response =
-      vix::requests::get("http://example.com/missing");
+#include <vix/requests/requests.hpp>
 
-  response.raise_for_status();
-}
-catch (const vix::requests::InvalidUrlException &error)
+#include <iostream>
+
+int main()
 {
-  std::cerr << "invalid URL: " << error.what() << "\n";
+  try
+  {
+    auto response =
+        vix::requests::get("http://example.com/missing");
+
+    response.raise_for_status();
+  }
+  catch (const vix::requests::InvalidUrlException &error)
+  {
+    std::cerr << "invalid URL: " << error.what() << "\n";
+  }
+  catch (const vix::requests::UnsupportedProtocolException &error)
+  {
+    std::cerr << "unsupported protocol: " << error.what() << "\n";
+  }
+  catch (const vix::requests::TimeoutException &error)
+  {
+    std::cerr << "timeout: " << error.what() << "\n";
+  }
+  catch (const vix::requests::ConnectionException &error)
+  {
+    std::cerr << "connection error: " << error.what() << "\n";
+  }
+  catch (const vix::requests::TooManyRedirectsException &error)
+  {
+    std::cerr << "redirect error: " << error.what() << "\n";
+  }
+  catch (const vix::requests::HttpException &error)
+  {
+    std::cerr << "HTTP error: "
+              << error.status_code()
+              << " "
+              << error.reason()
+              << "\n";
+  }
+  catch (const vix::requests::RequestException &error)
+  {
+    std::cerr << "request error: " << error.what() << "\n";
+  }
 }
-catch (const vix::requests::UnsupportedProtocolException &error)
-{
-  std::cerr << "unsupported protocol: " << error.what() << "\n";
-}
-catch (const vix::requests::TimeoutException &error)
-{
-  std::cerr << "timeout: " << error.what() << "\n";
-}
-catch (const vix::requests::ConnectionException &error)
-{
-  std::cerr << "connection error: " << error.what() << "\n";
-}
-catch (const vix::requests::TooManyRedirectsException &error)
-{
-  std::cerr << "redirect error: " << error.what() << "\n";
-}
-catch (const vix::requests::HttpException &error)
-{
-  std::cerr << "HTTP error: "
-            << error.status_code()
-            << " "
-            << error.reason()
-            << "\n";
-}
-catch (const vix::requests::RequestException &error)
-{
-  std::cerr << "request error: " << error.what() << "\n";
-}
+```
+
+Run it:
+
+```bash
+vix run examples/error_handling.cpp
 ```
 
 ## Public API
@@ -313,6 +365,8 @@ options.timeout = std::chrono::seconds(10);
 options.follow_redirects = true;
 options.max_redirects = 10;
 
+options.verify_tls = true;
+
 options.set_basic_auth("username", "password");
 options.set_user_agent("my-client/1.0");
 ```
@@ -340,48 +394,133 @@ response.raise_for_status();
 response.elapsed();
 ```
 
-## Build
+## Build with Vix
 
-Standalone:
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
-```
-
-With tests:
+Build the module:
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DVIX_REQUESTS_BUILD_TESTS=ON
-cmake --build build -j
-ctest --test-dir build --output-on-failure
+vix build
 ```
 
-With examples:
+Build in release mode:
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVIX_REQUESTS_BUILD_EXAMPLES=ON
-cmake --build build -j
+vix build --preset release
 ```
 
-## CMake target
+Build all targets, including tests and examples:
 
-```cmake
-target_link_libraries(my_app PRIVATE vix::requests)
+```bash
+vix build --build-target all
 ```
 
-## CMake options
+Clean and rebuild:
 
-| Option                        | Default | Description                             |
-| ----------------------------- | ------: | --------------------------------------- |
-| `VIX_REQUESTS_BUILD_TESTS`    |    `ON` | Build tests in standalone mode          |
-| `VIX_REQUESTS_BUILD_EXAMPLES` |    `ON` | Build examples in standalone mode       |
-| `VIX_REQUESTS_ENABLE_LTO`     |   `OFF` | Enable LTO in Release builds            |
-| `VIX_REQUESTS_INSTALL`        |    `ON` | Enable standalone install/package rules |
+```bash
+vix build --clean
+```
 
-Inside the Vix umbrella build, tests, examples, and standalone install rules are disabled by default.
+Show detailed Vix output:
+
+```bash
+vix build -v
+```
+
+Show raw CMake/Ninja output when debugging:
+
+```bash
+vix build --cmake-verbose
+```
+
+## Build options
+
+You can pass CMake options after `--`.
+
+Build with tests enabled:
+
+```bash
+vix build --build-target all -- -DVIX_REQUESTS_BUILD_TESTS=ON
+```
+
+Build with examples enabled:
+
+```bash
+vix build --build-target all -- -DVIX_REQUESTS_BUILD_EXAMPLES=ON
+```
+
+Build with tests and examples enabled:
+
+```bash
+vix build --build-target all -- \
+  -DVIX_REQUESTS_BUILD_TESTS=ON \
+  -DVIX_REQUESTS_BUILD_EXAMPLES=ON
+```
+
+Release build with LTO:
+
+```bash
+vix build --preset release -- \
+  -DVIX_REQUESTS_ENABLE_LTO=ON
+```
 
 ## Tests
+
+Build all targets first:
+
+```bash
+vix build --build-target all
+```
+
+Run all tests:
+
+```bash
+vix tests
+```
+
+Run tests with detailed Vix output:
+
+```bash
+vix tests -v
+```
+
+Run one test:
+
+```bash
+vix tests --test http_client_test
+```
+
+Short form:
+
+```bash
+vix tests -R http_client_test
+```
+
+Run the integration tests:
+
+```bash
+vix tests -R '^(http_client_test|redirect_test|timeout_test)$'
+```
+
+Run tests in release mode:
+
+```bash
+vix build --preset release --build-target all
+vix tests --preset release
+```
+
+List available tests:
+
+```bash
+vix tests --list
+```
+
+Show raw internal runner output:
+
+```bash
+vix tests --raw
+```
+
+## Test files
 
 Unit tests:
 
@@ -405,6 +544,7 @@ tests/integration/timeout_test.cpp
 ```
 
 Tests do not require external internet access.
+
 Integration tests use a local loopback HTTP server.
 
 ## Examples
@@ -417,6 +557,36 @@ examples/post_form.cpp
 examples/session.cpp
 examples/error_handling.cpp
 ```
+
+Run examples with Vix:
+
+```bash
+vix run examples/simple_get.cpp
+vix run examples/get_params.cpp
+vix run examples/post_json.cpp
+vix run examples/post_form.cpp
+vix run examples/session.cpp
+vix run examples/error_handling.cpp
+```
+
+## CMake target
+
+When using the module from CMake directly:
+
+```cmake
+target_link_libraries(my_app PRIVATE vix::requests)
+```
+
+## CMake options
+
+| Option                        | Default | Description                             |
+| ----------------------------- | ------: | --------------------------------------- |
+| `VIX_REQUESTS_BUILD_TESTS`    |    `ON` | Build tests in standalone mode          |
+| `VIX_REQUESTS_BUILD_EXAMPLES` |    `ON` | Build examples in standalone mode       |
+| `VIX_REQUESTS_ENABLE_LTO`     |   `OFF` | Enable LTO in release builds            |
+| `VIX_REQUESTS_INSTALL`        |    `ON` | Enable standalone install/package rules |
+
+Inside the Vix umbrella build, tests, examples, and standalone install rules are disabled by default unless explicitly enabled.
 
 ## Design
 
@@ -494,6 +664,27 @@ src/detail/
 - No gzip or deflate decompression is advertised or faked.
 - HTTP proxy support is not implemented yet.
 - Connection reuse is prepared by design, but the current transport opens one connection per request.
+
+## Recommended development workflow
+
+```bash
+vix build
+vix tests
+```
+
+Before committing:
+
+```bash
+vix build --build-target all
+vix tests
+```
+
+Before release:
+
+```bash
+vix build --preset release --build-target all
+vix tests --preset release
+```
 
 ## License
 
