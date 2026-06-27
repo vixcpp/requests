@@ -1,0 +1,663 @@
+name: Requests Strict CI
+
+on:
+  push:
+    branches: [main, master, dev, "release/**"]
+    paths:
+      - ".github/workflows/requests-strict-ci.yml"
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "include/**"
+      - "src/**"
+      - "tests/**"
+      - "examples/**"
+      - "docs/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "vix.json"
+
+  pull_request:
+    branches: [main, master, dev, "release/**"]
+    paths:
+      - ".github/workflows/requests-strict-ci.yml"
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "include/**"
+      - "src/**"
+      - "tests/**"
+      - "examples/**"
+      - "docs/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "vix.json"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DEPS: >
+    build-essential
+    cmake
+    ninja-build
+    clang
+    llvm
+    lld
+    g++
+    cppcheck
+    clang-tidy
+    valgrind
+    pkg-config
+    git
+    curl
+    ca-certificates
+    libasio-dev
+    libssl-dev
+  BUILD_JOBS: 2
+  VIX_GIT_BRANCH: dev
+
+jobs:
+  build-test:
+    name: Build and Tests (${{ matrix.compiler }}, examples=${{ matrix.examples }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [clang, gcc]
+        examples: [ON, OFF]
+
+    env:
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:strict_string_checks=1:check_initialization_order=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+
+    steps:
+      - name: Checkout requests repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $DEPS
+          test -f /usr/include/asio.hpp
+          test -f /usr/include/openssl/ssl.h
+
+      - name: Select compiler
+        run: |
+          set -euxo pipefail
+
+          if [ "${{ matrix.compiler }}" = "clang" ]; then
+            echo "CC=clang" >> "$GITHUB_ENV"
+            echo "CXX=clang++" >> "$GITHUB_ENV"
+          else
+            echo "CC=gcc" >> "$GITHUB_ENV"
+            echo "CXX=g++" >> "$GITHUB_ENV"
+          fi
+
+      - name: Fetch and install async dependency
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          rm -rf ../async .ci-deps
+
+          ASYNC_URL="https://github.com/vixcpp/async.git"
+
+          if git ls-remote --exit-code --heads "$ASYNC_URL" "${VIX_GIT_BRANCH}" >/dev/null 2>&1; then
+            git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules "$ASYNC_URL" ../async
+          else
+            git clone --depth 1 --branch main --recurse-submodules "$ASYNC_URL" ../async
+          fi
+
+          git -C ../async submodule update --init --recursive --depth 1 || true
+
+          rm -rf ../async/third_party/asio/include
+          mkdir -p ../async/third_party/asio/include
+          cp -r /usr/include/asio* ../async/third_party/asio/include/ || true
+          test -f ../async/third_party/asio/include/asio.hpp
+
+          cmake -S ../async -B ../async/build-install -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DASYNC_BUILD_TESTS=OFF \
+            -DASYNC_BUILD_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/.ci-deps"
+
+          cmake --build ../async/build-install -j"${BUILD_JOBS}"
+          cmake --install ../async/build-install
+
+          test -f .ci-deps/lib/cmake/async/asyncConfig.cmake
+          test -f .ci-deps/lib/cmake/async/asyncConfigVersion.cmake
+
+      - name: Configure requests
+        run: |
+          set -euxo pipefail
+
+          cmake -S . -B build-tests -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_PREFIX_PATH="${PWD}/.ci-deps" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DVIX_REQUESTS_BUILD_TESTS=ON \
+            -DVIX_REQUESTS_BUILD_EXAMPLES=${{ matrix.examples }} \
+            -DVIX_REQUESTS_INSTALL=ON
+
+      - name: Build requests
+        run: |
+          set -euxo pipefail
+          cmake --build build-tests -j"${BUILD_JOBS}"
+
+      - name: List tests
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build-tests -N
+
+      - name: Run tests
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build-tests --output-on-failure --timeout 120
+
+  runtime-smoke:
+    name: Runtime Smoke Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout requests repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $DEPS
+          test -f /usr/include/asio.hpp
+          test -f /usr/include/openssl/ssl.h
+
+      - name: Fetch and install async dependency
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          rm -rf ../async .ci-deps
+
+          ASYNC_URL="https://github.com/vixcpp/async.git"
+
+          if git ls-remote --exit-code --heads "$ASYNC_URL" "${VIX_GIT_BRANCH}" >/dev/null 2>&1; then
+            git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules "$ASYNC_URL" ../async
+          else
+            git clone --depth 1 --branch main --recurse-submodules "$ASYNC_URL" ../async
+          fi
+
+          git -C ../async submodule update --init --recursive --depth 1 || true
+
+          rm -rf ../async/third_party/asio/include
+          mkdir -p ../async/third_party/asio/include
+          cp -r /usr/include/asio* ../async/third_party/asio/include/ || true
+          test -f ../async/third_party/asio/include/asio.hpp
+
+          cmake -S ../async -B ../async/build-install -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DASYNC_BUILD_TESTS=OFF \
+            -DASYNC_BUILD_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/.ci-deps"
+
+          cmake --build ../async/build-install -j"${BUILD_JOBS}"
+          cmake --install ../async/build-install
+
+          test -f .ci-deps/lib/cmake/async/asyncConfig.cmake
+
+      - name: Configure runtime build
+        run: |
+          set -euxo pipefail
+
+          cmake -S . -B build-runtime -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_PREFIX_PATH="${PWD}/.ci-deps" \
+            -DVIX_REQUESTS_BUILD_TESTS=ON \
+            -DVIX_REQUESTS_BUILD_EXAMPLES=ON \
+            -DVIX_REQUESTS_INSTALL=ON
+
+      - name: Build runtime artifacts
+        run: |
+          set -euxo pipefail
+          cmake --build build-runtime -j"${BUILD_JOBS}"
+
+      - name: Run runtime tests
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build-runtime --output-on-failure --timeout 120
+
+      - name: Smoke test executables
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FAIL=0
+
+          mapfile -t CANDIDATES < <(
+            find build-runtime -type f -executable | while read -r exe; do
+              base="$(basename "$exe")"
+
+              if [[ "$exe" =~ /CMakeFiles/ ]]; then
+                continue
+              fi
+
+              if [[ "$base" =~ (cmake|ctest) ]]; then
+                continue
+              fi
+
+              echo "$exe"
+            done | sort -u
+          )
+
+          if [ ${#CANDIDATES[@]} -eq 0 ]; then
+            echo "::warning::No executable candidates found."
+            exit 0
+          fi
+
+          for exe in "${CANDIDATES[@]}"; do
+            base="$(basename "$exe")"
+
+            if [[ "$base" =~ (server|listener|daemon) ]]; then
+              echo "Skipping server-like executable: $exe"
+              continue
+            fi
+
+            echo "==> Smoke run: $exe"
+
+            set +e
+            timeout 8s "$exe" >/tmp/requests_smoke.log 2>&1
+            STATUS=$?
+            set -e
+
+            cat /tmp/requests_smoke.log || true
+
+            if [ $STATUS -ne 0 ] && [ $STATUS -ne 124 ]; then
+              echo "::error::Smoke test failed for $exe with status $STATUS"
+              FAIL=1
+            fi
+          done
+
+          exit "$FAIL"
+
+  static-analysis:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout requests repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $DEPS
+          test -f /usr/include/asio.hpp
+          test -f /usr/include/openssl/ssl.h
+
+      - name: Fetch and install async dependency
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          rm -rf ../async .ci-deps
+
+          ASYNC_URL="https://github.com/vixcpp/async.git"
+
+          if git ls-remote --exit-code --heads "$ASYNC_URL" "${VIX_GIT_BRANCH}" >/dev/null 2>&1; then
+            git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules "$ASYNC_URL" ../async
+          else
+            git clone --depth 1 --branch main --recurse-submodules "$ASYNC_URL" ../async
+          fi
+
+          git -C ../async submodule update --init --recursive --depth 1 || true
+
+          rm -rf ../async/third_party/asio/include
+          mkdir -p ../async/third_party/asio/include
+          cp -r /usr/include/asio* ../async/third_party/asio/include/ || true
+          test -f ../async/third_party/asio/include/asio.hpp
+
+          cmake -S ../async -B ../async/build-install -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DASYNC_BUILD_TESTS=OFF \
+            -DASYNC_BUILD_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/.ci-deps"
+
+          cmake --build ../async/build-install -j"${BUILD_JOBS}"
+          cmake --install ../async/build-install
+
+          test -f .ci-deps/lib/cmake/async/asyncConfig.cmake
+
+      - name: Configure analysis build
+        run: |
+          set -euxo pipefail
+
+          cmake -S . -B build-analyze -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_PREFIX_PATH="${PWD}/.ci-deps" \
+            -DVIX_REQUESTS_BUILD_TESTS=ON \
+            -DVIX_REQUESTS_BUILD_EXAMPLES=ON \
+            -DVIX_REQUESTS_INSTALL=ON
+
+      - name: Build analysis target
+        run: |
+          set -euxo pipefail
+          cmake --build build-analyze -j"${BUILD_JOBS}"
+
+      - name: Run clang-tidy on source files
+        run: |
+          set +e
+
+          mapfile -d '' FILES < <(find src tests examples -name '*.cpp' -print0)
+
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "::error::No C++ files found for clang-tidy."
+            exit 1
+          fi
+
+          clang-tidy -p build-analyze "${FILES[@]}"
+          STATUS=$?
+
+          if [ $STATUS -ne 0 ]; then
+            echo "::warning::clang-tidy reported issues."
+          else
+            echo "clang-tidy completed successfully."
+          fi
+
+          exit 0
+
+      - name: Run cppcheck on library code
+        run: |
+          set -euxo pipefail
+
+          cppcheck \
+            --enable=warning,performance,portability \
+            --std=c++20 \
+            --inconclusive \
+            --error-exitcode=2 \
+            --suppress=missingIncludeSystem \
+            --inline-suppr \
+            include/ src/
+
+      - name: Run cppcheck style report
+        run: |
+          set +e
+
+          cppcheck \
+            --enable=style \
+            --std=c++20 \
+            --suppress=missingIncludeSystem \
+            --inline-suppr \
+            include/ src/ tests/ examples/
+
+          STATUS=$?
+
+          if [ $STATUS -ne 0 ]; then
+            echo "::warning::cppcheck style report found issues."
+          else
+            echo "cppcheck style report completed successfully."
+          fi
+
+          exit 0
+
+  valgrind:
+    name: Valgrind Memory Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout requests repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $DEPS
+          test -f /usr/include/asio.hpp
+          test -f /usr/include/openssl/ssl.h
+
+      - name: Fetch and install async dependency
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          rm -rf ../async .ci-deps
+
+          ASYNC_URL="https://github.com/vixcpp/async.git"
+
+          if git ls-remote --exit-code --heads "$ASYNC_URL" "${VIX_GIT_BRANCH}" >/dev/null 2>&1; then
+            git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules "$ASYNC_URL" ../async
+          else
+            git clone --depth 1 --branch main --recurse-submodules "$ASYNC_URL" ../async
+          fi
+
+          git -C ../async submodule update --init --recursive --depth 1 || true
+
+          rm -rf ../async/third_party/asio/include
+          mkdir -p ../async/third_party/asio/include
+          cp -r /usr/include/asio* ../async/third_party/asio/include/ || true
+          test -f ../async/third_party/asio/include/asio.hpp
+
+          cmake -S ../async -B ../async/build-install -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DASYNC_BUILD_TESTS=OFF \
+            -DASYNC_BUILD_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/.ci-deps"
+
+          cmake --build ../async/build-install -j"${BUILD_JOBS}"
+          cmake --install ../async/build-install
+
+          test -f .ci-deps/lib/cmake/async/asyncConfig.cmake
+
+      - name: Configure valgrind build
+        run: |
+          set -euxo pipefail
+
+          cmake -S . -B build-valgrind -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_PREFIX_PATH="${PWD}/.ci-deps" \
+            -DVIX_REQUESTS_BUILD_TESTS=ON \
+            -DVIX_REQUESTS_BUILD_EXAMPLES=OFF \
+            -DVIX_REQUESTS_INSTALL=ON
+
+      - name: Build valgrind targets
+        run: |
+          set -euxo pipefail
+          cmake --build build-valgrind -j"${BUILD_JOBS}"
+
+      - name: List tests before valgrind
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build-valgrind -N
+
+      - name: Run valgrind on test executables
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FAIL=0
+
+          mapfile -t TEST_BINS < <(
+            find build-valgrind -type f -executable 2>/dev/null \
+              | grep -E '(test|tests)' \
+              | grep -Ev '(/CMakeFiles/|_bench$|bench$)' \
+              | sort
+          )
+
+          if [ ${#TEST_BINS[@]} -eq 0 ]; then
+            echo "::warning::No test executables found for valgrind."
+            exit 0
+          fi
+
+          for exe in "${TEST_BINS[@]}"; do
+            echo "==> Valgrind: $exe"
+
+            set +e
+            timeout 120s valgrind \
+              --leak-check=full \
+              --show-leak-kinds=all \
+              --track-origins=yes \
+              --errors-for-leak-kinds=definite,indirect,possible \
+              --error-exitcode=99 \
+              "$exe"
+            STATUS=$?
+            set -e
+
+            if [ $STATUS -ne 0 ]; then
+              echo "::error::Valgrind failed for $exe with status $STATUS"
+              FAIL=1
+            fi
+          done
+
+          exit "$FAIL"
+
+  release-and-package:
+    name: Release and Package Export
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout requests repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $DEPS
+          test -f /usr/include/asio.hpp
+          test -f /usr/include/openssl/ssl.h
+
+      - name: Fetch and install async dependency
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          rm -rf ../async .ci-deps
+
+          ASYNC_URL="https://github.com/vixcpp/async.git"
+
+          if git ls-remote --exit-code --heads "$ASYNC_URL" "${VIX_GIT_BRANCH}" >/dev/null 2>&1; then
+            git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules "$ASYNC_URL" ../async
+          else
+            git clone --depth 1 --branch main --recurse-submodules "$ASYNC_URL" ../async
+          fi
+
+          git -C ../async submodule update --init --recursive --depth 1 || true
+
+          rm -rf ../async/third_party/asio/include
+          mkdir -p ../async/third_party/asio/include
+          cp -r /usr/include/asio* ../async/third_party/asio/include/ || true
+          test -f ../async/third_party/asio/include/asio.hpp
+
+          cmake -S ../async -B ../async/build-install -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DASYNC_BUILD_TESTS=OFF \
+            -DASYNC_BUILD_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/.ci-deps"
+
+          cmake --build ../async/build-install -j"${BUILD_JOBS}"
+          cmake --install ../async/build-install
+
+          test -f .ci-deps/lib/cmake/async/asyncConfig.cmake
+
+      - name: Configure release tests
+        run: |
+          set -euxo pipefail
+
+          cmake -S . -B build-release -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_PREFIX_PATH="${PWD}/.ci-deps" \
+            -DVIX_REQUESTS_BUILD_TESTS=ON \
+            -DVIX_REQUESTS_BUILD_EXAMPLES=ON \
+            -DVIX_REQUESTS_ENABLE_LTO=OFF \
+            -DVIX_REQUESTS_INSTALL=ON
+
+      - name: Build release tests
+        run: |
+          set -euxo pipefail
+          cmake --build build-release -j"${BUILD_JOBS}"
+
+      - name: Run release tests
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build-release --output-on-failure --timeout 120
+
+      - name: Configure installable package
+        run: |
+          set -euxo pipefail
+
+          cmake -S . -B build-install -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_PREFIX_PATH="${PWD}/.ci-deps" \
+            -DVIX_REQUESTS_BUILD_TESTS=OFF \
+            -DVIX_REQUESTS_BUILD_EXAMPLES=OFF \
+            -DVIX_REQUESTS_ENABLE_LTO=OFF \
+            -DVIX_REQUESTS_INSTALL=ON \
+            -DCMAKE_INSTALL_PREFIX="${PWD}/.ci-install"
+
+      - name: Build installable package
+        run: |
+          set -euxo pipefail
+          cmake --build build-install -j"${BUILD_JOBS}"
+
+      - name: Install package
+        run: |
+          set -euxo pipefail
+          cmake --install build-install
+
+      - name: Verify install tree
+        run: |
+          set -euxo pipefail
+
+          find .ci-install -maxdepth 8 -type f | sort
+
+          test -d .ci-install/include/vix
+          test -f .ci-install/lib/cmake/vix_requests/vix_requestsTargets.cmake
+          test -f .ci-install/lib/cmake/vix_requests/vix_requestsConfig.cmake
+          test -f .ci-install/lib/cmake/vix_requests/vix_requestsConfigVersion.cmake
+
+  summary:
+    name: Requests Strict CI Summary
+    needs:
+      - build-test
+      - runtime-smoke
+      - static-analysis
+      - valgrind
+      - release-and-package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Print summary
+        run: |
+          echo "Requests strict CI completed successfully."
+          echo "- Debug builds with clang and gcc"
+          echo "- Tests with examples ON and OFF"
+          echo "- Runtime smoke checks"
+          echo "- Static analysis"
+          echo "- Valgrind memory checks"
+          echo "- Release tests"
+          echo "- Standalone package export check"
+          echo "- async dependency installed through CMAKE_PREFIX_PATH"

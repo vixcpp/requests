@@ -1,0 +1,10 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(async CONFIG REQUIRED)
+find_dependency(OpenSSL REQUIRED)
+
+include("${CMAKE_CURRENT_LIST_DIR}/vix_requestsTargets.cmake")
+
+check_required_components(vix_requests)
