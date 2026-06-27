@@ -1,5 +1,6 @@
 #include <vix/requests/requests.hpp>
 #include "example_env.hpp"
+#include "example_server.hpp"
 
 #include <iostream>
 #include <string>
@@ -7,7 +8,6 @@
 
 namespace
 {
-
   class ApiClient
   {
   public:
@@ -52,8 +52,9 @@ namespace
 
 int main()
 {
+  vix_examples::requests::ExampleHttpServer server;
   ApiClient api(
-      vix_examples::requests::env_or("VIX_REQUESTS_BASE_URL", "https://httpbin.org"),
+      vix_examples::requests::env_or("VIX_REQUESTS_BASE_URL", server.base_url()),
       vix_examples::requests::env_or("VIX_REQUESTS_TOKEN", ""));
 
   const auto list = api.list_items(1);

@@ -17,6 +17,7 @@
  */
 
 #include <vix/requests/requests.hpp>
+#include "example_server.hpp"
 
 #include <chrono>
 #include <iostream>
@@ -25,6 +26,7 @@ int main()
 {
   try
   {
+    vix_examples::requests::ExampleHttpServer server;
     vix::requests::Session session;
 
     session.headers().set("User-Agent", "vix-requests-example/1.0.0");
@@ -35,7 +37,7 @@ int main()
     session.timeout() = std::chrono::seconds(10);
 
     const auto first =
-        session.get("http://127.0.0.1:8080/api/profile");
+        session.get(server.url("/api/profile"));
 
     std::cout << "First status : " << first.status_code() << '\n';
     std::cout << "First URL    : " << first.url() << '\n';
@@ -47,7 +49,7 @@ int main()
 
     const auto second =
         session.post(
-            "http://127.0.0.1:8080/api/items",
+            server.url("/api/items"),
             vix::requests::form_body({{"name", "Gaspard"},
                                       {"project", "Vix Requests"}}));
 

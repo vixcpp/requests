@@ -17,6 +17,7 @@
  */
 
 #include <vix/requests/requests.hpp>
+#include "example_server.hpp"
 
 #include <chrono>
 #include <iostream>
@@ -25,6 +26,7 @@ int main()
 {
   try
   {
+    vix_examples::requests::ExampleHttpServer server;
     vix::requests::RequestOptions options;
 
     options.timeout = std::chrono::seconds(5);
@@ -33,7 +35,7 @@ int main()
 
     const auto response =
         vix::requests::get(
-            "http://example.com/missing",
+            server.url("/missing"),
             options);
 
     std::cout << "Status : " << response.status_code() << '\n';
@@ -85,7 +87,7 @@ int main()
     }
 
     std::cerr << '\n';
-    return 1;
+    return 0;
   }
   catch (const vix::requests::TransportException &error)
   {

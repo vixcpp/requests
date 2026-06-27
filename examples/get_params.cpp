@@ -17,6 +17,7 @@
  */
 
 #include <vix/requests/requests.hpp>
+#include "example_server.hpp"
 
 #include <chrono>
 #include <iostream>
@@ -25,6 +26,7 @@ int main()
 {
   try
   {
+    vix_examples::requests::ExampleHttpServer server;
     vix::requests::RequestOptions options;
 
     options.headers.set("Accept", "text/plain");
@@ -37,7 +39,7 @@ int main()
 
     const auto response =
         vix::requests::get(
-            "http://example.com/search",
+            server.url("/search"),
             options);
 
     std::cout << "Status : " << response.status_code() << '\n';

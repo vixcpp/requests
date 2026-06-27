@@ -1,5 +1,6 @@
 #include <vix/requests/requests.hpp>
 #include "example_env.hpp"
+#include "example_server.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -7,7 +8,9 @@
 
 int main()
 {
-  const std::string url = vix_examples::requests::env_or("VIX_REQUESTS_DOWNLOAD_URL", "https://httpbin.org/bytes/1024");
+  vix_examples::requests::ExampleHttpServer server;
+  const std::string url =
+      vix_examples::requests::env_or("VIX_REQUESTS_DOWNLOAD_URL", server.url("/bytes/1024"));
   const std::string outputPath = vix_examples::requests::env_or("VIX_REQUESTS_OUTPUT", "requests_download.bin");
 
   vix::requests::RequestOptions options;

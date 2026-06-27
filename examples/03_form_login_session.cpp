@@ -1,12 +1,15 @@
 #include <vix/requests/requests.hpp>
 #include "example_env.hpp"
+#include "example_server.hpp"
 
 #include <iostream>
 #include <string>
 
 int main()
 {
-  const std::string baseUrl = vix_examples::requests::env_or("VIX_REQUESTS_BASE_URL", "https://httpbin.org");
+  vix_examples::requests::ExampleHttpServer server;
+  const std::string baseUrl =
+      vix_examples::requests::env_or("VIX_REQUESTS_BASE_URL", server.base_url());
 
   vix::requests::Session session;
   session.headers().set("Accept", "application/json");

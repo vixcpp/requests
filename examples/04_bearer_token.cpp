@@ -1,12 +1,15 @@
 #include <vix/requests/requests.hpp>
 #include "example_env.hpp"
+#include "example_server.hpp"
 
 #include <iostream>
 #include <string>
 
 int main()
 {
-  const std::string url = vix_examples::requests::env_or("VIX_REQUESTS_AUTH_URL", "https://httpbin.org/bearer");
+  vix_examples::requests::ExampleHttpServer server;
+  const std::string url =
+      vix_examples::requests::env_or("VIX_REQUESTS_AUTH_URL", server.url("/bearer"));
   const std::string token = vix_examples::requests::env_or("VIX_REQUESTS_TOKEN", "demo-token");
 
   vix::requests::RequestOptions options;

@@ -17,6 +17,7 @@
  */
 
 #include <vix/requests/requests.hpp>
+#include "example_server.hpp"
 
 #include <chrono>
 #include <iostream>
@@ -25,6 +26,7 @@ int main()
 {
   try
   {
+    vix_examples::requests::ExampleHttpServer server;
     vix::requests::RequestOptions options;
 
     options.headers.set("Accept", "text/plain");
@@ -32,7 +34,7 @@ int main()
 
     const auto response =
         vix::requests::post(
-            "http://127.0.0.1:8080/login",
+            server.url("/login"),
             vix::requests::form_body({{"username", "gaspard"},
                                       {"project", "Vix Requests"}}),
             options);

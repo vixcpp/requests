@@ -2,24 +2,28 @@
 #include <vix/async/core/io_context.hpp>
 #include <vix/async/core/task.hpp>
 #include "example_env.hpp"
+#include "example_server.hpp"
 
 #include <exception>
 #include <iostream>
 #include <string>
+#include <utility>
 
 namespace
 {
-
   vix::async::core::task<void> app(vix::async::core::io_context &ctx)
   {
-    const std::string baseUrl = vix_examples::requests::env_or("VIX_REQUESTS_BASE_URL", "https://httpbin.org");
+    vix_examples::requests::ExampleHttpServer server;
+    const std::string baseUrl =
+        vix_examples::requests::env_or("VIX_REQUESTS_BASE_URL", server.base_url());
 
     vix::requests::RequestOptions options;
     options.params.set("mode", "async");
     options.headers.set("Accept", "application/json");
 
-    auto requestTask = vix::requests::async_get(ctx, baseUrl + "/get", options);
-    const auto response = co_await requestTask;
+    const std::string url = baseUrl + "/get";
+    auto requestTask = vix::requests::async_get(ctx, url, options);
+    const auto response = co_await std::move(requestTask);
 
     std::cout << "async status: " << response.status_code() << '\n';
     std::cout << response.text() << '\n';
@@ -38,7 +42,7 @@ namespace
     try
     {
       auto task = app(ctx);
-      co_await task;
+      co_await std::move(task);
     }
     catch (...)
     {

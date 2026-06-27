@@ -17,6 +17,7 @@
  */
 
 #include <vix/requests/requests.hpp>
+#include "example_server.hpp"
 
 #include <iostream>
 
@@ -24,8 +25,9 @@ int main()
 {
   try
   {
+    vix_examples::requests::ExampleHttpServer server;
     const auto response =
-        vix::requests::get("http://example.com/");
+        vix::requests::get(server.url("/get"));
 
     std::cout << "Status : " << response.status_code() << '\n';
     std::cout << "Reason : " << response.reason() << '\n';

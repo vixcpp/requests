@@ -1,5 +1,6 @@
 #include <vix/requests/requests.hpp>
 #include "example_env.hpp"
+#include "example_server.hpp"
 
 #include <chrono>
 #include <iostream>
@@ -8,7 +9,9 @@
 
 int main()
 {
-  const std::string url = vix_examples::requests::env_or("VIX_REQUESTS_RETRY_URL", "https://httpbin.org/delay/1");
+  vix_examples::requests::ExampleHttpServer server;
+  const std::string url =
+      vix_examples::requests::env_or("VIX_REQUESTS_RETRY_URL", server.url("/delay/1"));
 
   vix::requests::RequestOptions options;
   options.timeout.set_connect(std::chrono::seconds(2));

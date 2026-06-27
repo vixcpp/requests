@@ -1,12 +1,15 @@
 #include <vix/requests/requests.hpp>
 #include "example_env.hpp"
+#include "example_server.hpp"
 
 #include <iostream>
 #include <string>
 
 int main()
 {
-  const std::string url = vix_examples::requests::env_or("VIX_REQUESTS_ERROR_URL", "https://httpbin.org/status/404");
+  vix_examples::requests::ExampleHttpServer server;
+  const std::string url =
+      vix_examples::requests::env_or("VIX_REQUESTS_ERROR_URL", server.url("/status/404"));
 
   try
   {
