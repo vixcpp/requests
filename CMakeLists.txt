@@ -90,6 +90,8 @@ set(VIX_REQUESTS_SOURCES
   src/http/RedirectPolicy.cpp
   src/http/CookieJar.cpp
 
+  src/transport/Resolver.cpp
+  src/transport/Socket.cpp
   src/transport/TcpTransport.cpp
   src/transport/HttpsTransport.cpp
   src/transport/TransportFactory.cpp

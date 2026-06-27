@@ -25,6 +25,8 @@
 
 #include "http/HttpParser.hpp"
 #include "http/HttpSerializer.hpp"
+#include "transport/Resolver.hpp"
+#include "transport/Socket.hpp"
 
 #include <array>
 #include <chrono>
@@ -156,25 +158,6 @@ namespace vix::requests::transport
           source.token());
     }
 
-    core::task<void> drive_sync(
-        core::io_context &ctx,
-        core::task<Response> task,
-        Response &response,
-        std::exception_ptr &error)
-    {
-      try
-      {
-        response = co_await std::move(task);
-      }
-      catch (...)
-      {
-        error = std::current_exception();
-      }
-
-      ctx.stop();
-      co_return;
-    }
-
     [[nodiscard]] core::task<void> async_write_all(
         core::io_context &ctx,
         net::tcp_stream &stream,
@@ -240,23 +223,93 @@ namespace vix::requests::transport
 
   Response TcpTransport::send(const Request &request)
   {
-    core::io_context ctx;
-    std::exception_ptr error;
-    Response response;
-
-    auto runner = drive_sync(
-        ctx,
-        async_send(ctx, request),
-        response,
-        error);
-
-    ctx.post(runner.handle());
-    ctx.run();
-
-    if (error)
+    if (!supports(request.final_url()))
     {
-      std::rethrow_exception(error);
+      throw UnsupportedProtocolException(
+          "TcpTransport only supports plain HTTP URLs");
     }
+
+    const auto started = std::chrono::steady_clock::now();
+    const ResolveResult addresses = resolve_tcp(
+        request.final_url().host(),
+        request.final_url().port());
+
+    Socket socket;
+    std::exception_ptr lastError;
+
+    for (const ResolvedAddress &address : addresses)
+    {
+      try
+      {
+        Socket candidate = Socket::tcp(address.family);
+        candidate.connect(
+            &address.address,
+            address.addressLength,
+            request.options().timeout);
+        socket = std::move(candidate);
+        break;
+      }
+      catch (...)
+      {
+        lastError = std::current_exception();
+      }
+    }
+
+    if (!socket.valid())
+    {
+      if (lastError)
+      {
+        std::rethrow_exception(lastError);
+      }
+
+      throw ConnectionException("failed to connect socket");
+    }
+
+    const http::SerializedRequest serialized =
+        http::serialize_request(request);
+
+    static_cast<void>(socket.send_all(
+        serialized.data,
+        request.options().timeout));
+
+    std::string rawResponse;
+
+    while (true)
+    {
+      const std::string chunk = socket.receive(
+          readChunkSize,
+          request.options().timeout);
+
+      if (chunk.empty())
+      {
+        break;
+      }
+
+      rawResponse += chunk;
+
+      if (response_complete(rawResponse, request.expects_response_body()))
+      {
+        break;
+      }
+    }
+
+    socket.close();
+
+    if (rawResponse.empty())
+    {
+      throw ConnectionException("empty HTTP response");
+    }
+
+    Response response = http::parse_response(
+        rawResponse,
+        request.final_url().without_fragment(),
+        request.expects_response_body());
+
+    const auto finished = std::chrono::steady_clock::now();
+
+    response.set_elapsed(
+        std::chrono::duration_cast<Response::Duration>(
+            finished - started));
 
     return response;
   }

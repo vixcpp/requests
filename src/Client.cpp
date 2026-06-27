@@ -32,66 +32,17 @@ namespace vix::requests
   {
     namespace core = vix::async::core;
 
-    [[nodiscard]] core::task<Response> send_once_async(
-        core::io_context &ctx,
-        const Request &request)
+    [[nodiscard]] Response send_once(const Request &request)
     {
       auto transport =
           transport::make_transport_for_url(request.final_url());
 
-      auto pending = transport->async_send(ctx, request);
-      co_return co_await pending;
+      return transport->send(request);
     }
 
-    core::task<void> drive_sync(
-        core::io_context &ctx,
-        core::task<Response> &task,
-        Response &response,
-        std::exception_ptr &error)
-    {
-      try
-      {
-        response = co_await task;
-      }
-      catch (...)
-      {
-        error = std::current_exception();
-      }
-
-      ctx.stop();
-      co_return;
-    }
-
-    [[nodiscard]] Response run_sync(
-        core::io_context &ctx,
-        core::task<Response> task)
-    {
-      Response response;
-      std::exception_ptr error;
-
-      auto runner = drive_sync(ctx, task, response, error);
-
-      ctx.post(runner.handle());
-      ctx.run();
-
-      if (error)
-      {
-        std::rethrow_exception(error);
-      }
-
-      return response;
-    }
   } // namespace
 
   Response Client::send(const Request &request) const
-  {
-    core::io_context ctx;
-    return run_sync(ctx, async_send(ctx, request));
-  }
-
-  core::task<Response> Client::async_send(
-      core::io_context &ctx,
-      const Request &request) const
   {
     http::RedirectHistory history;
     Request current = request;
@@ -108,8 +59,7 @@ namespace vix::requests
 
       history.add(currentUrl);
 
-      auto responseTask = send_once_async(ctx, current);
-      Response response = co_await responseTask;
+      Response response = send_once(current);
 
       const http::RedirectDecision decision =
           http::decide_redirect(
@@ -119,11 +69,18 @@ namespace vix::requests
 
       if (!decision.follow)
       {
-        co_return response;
+        return response;
       }
 
       current = http::make_redirect_request(current, decision);
     }
+  }
+
+  core::task<Response> Client::async_send(
+      core::io_context &,
+      const Request &request) const
+  {
+    co_return send(request);
   }
 
   Response Client::request(
@@ -225,10 +182,11 @@ namespace vix::requests
       RequestOptions options,
       Body body) const
   {
+    Request request(method, url, std::move(options), std::move(body));
     auto pending = async_send(
         ctx,
-        Request(method, url, std::move(options), std::move(body)));
-    co_return co_await pending;
+        request);
+    co_return co_await std::move(pending);
   }
 
   core::task<Response> Client::async_request(
@@ -238,10 +196,11 @@ namespace vix::requests
       RequestOptions options,
       Body body) const
   {
+    Request request(method, url, std::move(options), std::move(body));
     auto pending = async_send(
         ctx,
-        Request(method, url, std::move(options), std::move(body)));
-    co_return co_await pending;
+        request);
+    co_return co_await std::move(pending);
   }
 
   core::task<Response> Client::async_get(
@@ -250,7 +209,7 @@ namespace vix::requests
       RequestOptions options) const
   {
     auto pending = async_request(ctx, Method::Get, url, std::move(options));
-    co_return co_await pending;
+    co_return co_await std::move(pending);
   }
 
   core::task<Response> Client::async_post(
@@ -265,7 +224,7 @@ namespace vix::requests
         url,
         std::move(options),
         std::move(body));
-    co_return co_await pending;
+    co_return co_await std::move(pending);
   }
 
   core::task<Response> Client::async_put(
@@ -280,7 +239,7 @@ namespace vix::requests
         url,
         std::move(options),
         std::move(body));
-    co_return co_await pending;
+    co_return co_await std::move(pending);
   }
 
   core::task<Response> Client::async_patch(
@@ -295,7 +254,7 @@ namespace vix::requests
         url,
         std::move(options),
         std::move(body));
-    co_return co_await pending;
+    co_return co_await std::move(pending);
   }
 
   core::task<Response> Client::async_del(
@@ -304,7 +263,7 @@ namespace vix::requests
       RequestOptions options) const
   {
     auto pending = async_request(ctx, Method::Delete, url, std::move(options));
-    co_return co_await pending;
+    co_return co_await std::move(pending);
   }
 
   core::task<Response> Client::async_head(
@@ -313,7 +272,7 @@ namespace vix::requests
       RequestOptions options) const
   {
     auto pending = async_request(ctx, Method::Head, url, std::move(options));
-    co_return co_await pending;
+    co_return co_await std::move(pending);
   }
 
   Response request(
@@ -416,7 +375,7 @@ namespace vix::requests
         url,
         std::move(options),
         std::move(body));
-    co_return co_await pending;
+    co_return co_await std::move(pending);
   }
 
   core::task<Response> async_request(
@@ -433,7 +392,7 @@ namespace vix::requests
         url,
         std::move(options),
         std::move(body));
-    co_return co_await pending;
+    co_return co_await std::move(pending);
   }
 
   core::task<Response> async_get(
@@ -443,7 +402,7 @@ namespace vix::requests
   {
     Client client;
     auto pending = client.async_get(ctx, url, std::move(options));
-    co_return co_await pending;
+    co_return co_await std::move(pending);
   }
 
   core::task<Response> async_post(
@@ -458,7 +417,7 @@ namespace vix::requests
         url,
         std::move(body),
         std::move(options));
-    co_return co_await pending;
+    co_return co_await std::move(pending);
   }
 
   core::task<Response> async_put(
@@ -473,7 +432,7 @@ namespace vix::requests
         url,
         std::move(body),
         std::move(options));
-    co_return co_await pending;
+    co_return co_await std::move(pending);
   }
 
   core::task<Response> async_patch(
@@ -488,7 +447,7 @@ namespace vix::requests
         url,
         std::move(body),
         std::move(options));
-    co_return co_await pending;
+    co_return co_await std::move(pending);
   }
 
   core::task<Response> async_del(
@@ -498,7 +457,7 @@ namespace vix::requests
   {
     Client client;
     auto pending = client.async_del(ctx, url, std::move(options));
-    co_return co_await pending;
+    co_return co_await std::move(pending);
   }
 
   core::task<Response> async_head(
@@ -508,7 +467,7 @@ namespace vix::requests
   {
     Client client;
     auto pending = client.async_head(ctx, url, std::move(options));
-    co_return co_await pending;
+    co_return co_await std::move(pending);
   }
 
 } // namespace vix::requests
