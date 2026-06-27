@@ -22,7 +22,7 @@ int main()
 
 ## Status
 
-Version: `1.2.0`
+Version: `1.2.1`
 
 This module is designed for Vix.cpp `v2.7.0`.
 
