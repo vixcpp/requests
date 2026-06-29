@@ -19,30 +19,86 @@
 #include "transport/Socket.hpp"
 #include <vix/requests/Error.hpp>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <limits>
 #include <sstream>
+#include <system_error>
 #include <utility>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 namespace vix::requests::transport
 {
   namespace
   {
-    [[nodiscard]] std::string errno_message(
+#if defined(_WIN32)
+    using NativeSocketAddressLength = int;
+#else
+    using NativeSocketAddressLength = socklen_t;
+#endif
+
+    [[nodiscard]] std::string socket_error_message(
         std::string_view prefix,
         int errorCode)
     {
       std::ostringstream oss;
-      oss << prefix << ": " << std::strerror(errorCode);
+      oss << prefix << ": ";
+#if defined(_WIN32)
+      oss << std::system_category().message(errorCode);
+#else
+      oss << std::strerror(errorCode);
+#endif
       return oss.str();
     }
+
+    [[nodiscard]] int last_socket_error() noexcept
+    {
+#if defined(_WIN32)
+      return ::WSAGetLastError();
+#else
+      return errno;
+#endif
+    }
+
+#if defined(_WIN32)
+    void ensure_winsock_started()
+    {
+      struct WinsockSession
+      {
+        WinsockSession()
+        {
+          WSADATA data{};
+          const int rc = ::WSAStartup(MAKEWORD(2, 2), &data);
+          if (rc != 0)
+          {
+            throw TransportException("failed to initialize Winsock");
+          }
+        }
+
+        ~WinsockSession()
+        {
+          ::WSACleanup();
+        }
+      };
+
+      static WinsockSession session;
+      static_cast<void>(session);
+    }
+#endif
 
     [[nodiscard]] timeval to_timeval(Timeout::Duration duration)
     {
@@ -54,18 +110,44 @@ namespace vix::requests::transport
 
     [[nodiscard]] bool would_block(int errorCode) noexcept
     {
+#if defined(_WIN32)
+      return errorCode == WSAEWOULDBLOCK;
+#else
       return errorCode == EAGAIN || errorCode == EWOULDBLOCK;
+#endif
     }
 
     [[nodiscard]] bool interrupted(int errorCode) noexcept
     {
+#if defined(_WIN32)
+      return errorCode == WSAEINTR;
+#else
       return errorCode == EINTR;
+#endif
+    }
+
+    [[nodiscard]] bool connect_in_progress(int errorCode) noexcept
+    {
+#if defined(_WIN32)
+      return errorCode == WSAEINPROGRESS ||
+             errorCode == WSAEALREADY ||
+             would_block(errorCode);
+#else
+      return errorCode == EINPROGRESS || would_block(errorCode);
+#endif
     }
 
     void validate_address_length(std::size_t addressLength)
     {
-      if (addressLength >
-          static_cast<std::size_t>(std::numeric_limits<socklen_t>::max()))
+#if defined(_WIN32)
+      constexpr auto maxSocketAddressLength =
+          static_cast<std::size_t>(std::numeric_limits<int>::max());
+#else
+      constexpr auto maxSocketAddressLength =
+          static_cast<std::size_t>(std::numeric_limits<socklen_t>::max());
+#endif
+
+      if (addressLength > maxSocketAddressLength)
       {
         throw TransportException("socket address is too large");
       }
@@ -100,12 +182,17 @@ namespace vix::requests::transport
 
   Socket Socket::tcp(int family)
   {
+#if defined(_WIN32)
+    ensure_winsock_started();
+#endif
+
     const NativeSocketHandle handle =
         ::socket(family, SOCK_STREAM, IPPROTO_TCP);
 
     if (handle == invalidSocketHandle)
     {
-      throw TransportException(errno_message("failed to create socket", errno));
+      throw TransportException(
+          socket_error_message("failed to create socket", last_socket_error()));
     }
 
     Socket socket(handle);
@@ -141,7 +228,7 @@ namespace vix::requests::transport
         static_cast<const sockaddr *>(address);
 
     const auto length =
-        static_cast<socklen_t>(addressLength);
+        static_cast<NativeSocketAddressLength>(addressLength);
 
     int result = ::connect(handle_, sockaddrPtr, length);
 
@@ -155,35 +242,38 @@ namespace vix::requests::transport
       return;
     }
 
-    const int connectError = errno;
+    const int connectError = last_socket_error();
 
-    if (!useTimeout ||
-        (connectError != EINPROGRESS && !would_block(connectError)))
+    if (!useTimeout || !connect_in_progress(connectError))
     {
       throw ConnectionException(
-          errno_message("failed to connect socket", connectError));
+          socket_error_message("failed to connect socket", connectError));
     }
 
     wait_writable(timeout.connect());
 
     int socketError = 0;
-    socklen_t socketErrorLength = sizeof(socketError);
+    NativeSocketAddressLength socketErrorLength = sizeof(socketError);
 
     if (::getsockopt(
             handle_,
             SOL_SOCKET,
             SO_ERROR,
+#if defined(_WIN32)
+            reinterpret_cast<char *>(&socketError),
+#else
             &socketError,
+#endif
             &socketErrorLength) != 0)
     {
       throw ConnectionException(
-          errno_message("failed to inspect socket connection", errno));
+          socket_error_message("failed to inspect socket connection", last_socket_error()));
     }
 
     if (socketError != 0)
     {
       throw ConnectionException(
-          errno_message("failed to connect socket", socketError));
+          socket_error_message("failed to connect socket", socketError));
     }
 
     set_non_blocking(false);
@@ -210,11 +300,18 @@ namespace vix::requests::transport
       const char *buffer = data.data() + totalSent;
       const std::size_t remaining = data.size() - totalSent;
 
-      const ssize_t sent = ::send(
+      const auto sent = ::send(
           handle_,
           buffer,
+#if defined(_WIN32)
+          static_cast<int>(std::min<std::size_t>(
+              remaining,
+              static_cast<std::size_t>(std::numeric_limits<int>::max()))),
+          0);
+#else
           remaining,
           MSG_NOSIGNAL);
+#endif
 
       if (sent > 0)
       {
@@ -227,7 +324,7 @@ namespace vix::requests::transport
         throw ConnectionException("socket closed while sending");
       }
 
-      const int sendError = errno;
+      const int sendError = last_socket_error();
 
       if (interrupted(sendError))
       {
@@ -240,7 +337,8 @@ namespace vix::requests::transport
         continue;
       }
 
-      throw TransportException(errno_message("failed to send socket data", sendError));
+      throw TransportException(
+          socket_error_message("failed to send socket data", sendError));
     }
 
     return totalSent;
@@ -270,10 +368,16 @@ namespace vix::requests::transport
 
     while (true)
     {
-      const ssize_t received = ::recv(
+      const auto received = ::recv(
           handle_,
           buffer.data(),
+#if defined(_WIN32)
+          static_cast<int>(std::min<std::size_t>(
+              buffer.size(),
+              static_cast<std::size_t>(std::numeric_limits<int>::max()))),
+#else
           buffer.size(),
+#endif
           0);
 
       if (received > 0)
@@ -287,7 +391,7 @@ namespace vix::requests::transport
         return {};
       }
 
-      const int recvError = errno;
+      const int recvError = last_socket_error();
 
       if (interrupted(recvError))
       {
@@ -301,7 +405,7 @@ namespace vix::requests::transport
       }
 
       throw TransportException(
-          errno_message("failed to receive socket data", recvError));
+          socket_error_message("failed to receive socket data", recvError));
     }
   }
 
@@ -309,7 +413,11 @@ namespace vix::requests::transport
   {
     if (valid())
     {
+#if defined(_WIN32)
+      ::closesocket(handle_);
+#else
       ::close(handle_);
+#endif
       handle_ = invalidSocketHandle;
     }
   }
@@ -343,11 +451,19 @@ namespace vix::requests::transport
       throw TransportException("cannot change mode of invalid socket");
     }
 
+#if defined(_WIN32)
+    u_long mode = enabled ? 1UL : 0UL;
+    if (::ioctlsocket(handle_, FIONBIO, &mode) != 0)
+    {
+      throw TransportException(
+          socket_error_message("failed to update socket mode", last_socket_error()));
+    }
+#else
     const int flags = ::fcntl(handle_, F_GETFL, 0);
     if (flags == -1)
     {
       throw TransportException(
-          errno_message("failed to read socket flags", errno));
+          socket_error_message("failed to read socket flags", errno));
     }
 
     const int nextFlags = enabled
@@ -357,8 +473,9 @@ namespace vix::requests::transport
     if (::fcntl(handle_, F_SETFL, nextFlags) == -1)
     {
       throw TransportException(
-          errno_message("failed to update socket flags", errno));
+          socket_error_message("failed to update socket flags", errno));
     }
+#endif
   }
 
   void Socket::set_close_on_exec()
@@ -368,6 +485,7 @@ namespace vix::requests::transport
       return;
     }
 
+#if !defined(_WIN32)
     const int flags = ::fcntl(handle_, F_GETFD, 0);
     if (flags == -1)
     {
@@ -375,6 +493,7 @@ namespace vix::requests::transport
     }
 
     static_cast<void>(::fcntl(handle_, F_SETFD, flags | FD_CLOEXEC));
+#endif
   }
 
   void Socket::wait_readable(Timeout::Duration timeout) const
@@ -391,7 +510,11 @@ namespace vix::requests::transport
     timeval tv = to_timeval(timeout);
 
     const int result = ::select(
+#if defined(_WIN32)
+        0,
+#else
         handle_ + 1,
+#endif
         &readSet,
         nullptr,
         nullptr,
@@ -407,13 +530,16 @@ namespace vix::requests::transport
       throw TimeoutException("socket read timed out");
     }
 
-    if (interrupted(errno))
+    const int waitError = last_socket_error();
+
+    if (interrupted(waitError))
     {
       wait_readable(timeout);
       return;
     }
 
-    throw TransportException(errno_message("failed waiting for socket read", errno));
+    throw TransportException(
+        socket_error_message("failed waiting for socket read", waitError));
   }
 
   void Socket::wait_writable(Timeout::Duration timeout) const
@@ -430,7 +556,11 @@ namespace vix::requests::transport
     timeval tv = to_timeval(timeout);
 
     const int result = ::select(
+#if defined(_WIN32)
+        0,
+#else
         handle_ + 1,
+#endif
         nullptr,
         &writeSet,
         nullptr,
@@ -446,13 +576,16 @@ namespace vix::requests::transport
       throw TimeoutException("socket write timed out");
     }
 
-    if (interrupted(errno))
+    const int waitError = last_socket_error();
+
+    if (interrupted(waitError))
     {
       wait_writable(timeout);
       return;
     }
 
-    throw TransportException(errno_message("failed waiting for socket write", errno));
+    throw TransportException(
+        socket_error_message("failed waiting for socket write", waitError));
   }
 
 } // namespace vix::requests::transport

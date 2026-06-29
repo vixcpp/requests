@@ -24,14 +24,48 @@
 #include <sstream>
 #include <utility>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#endif
 
 namespace vix::requests::transport
 {
   namespace
   {
+#if defined(_WIN32)
+    void ensure_winsock_started()
+    {
+      struct WinsockSession
+      {
+        WinsockSession()
+        {
+          WSADATA data{};
+          const int rc = ::WSAStartup(MAKEWORD(2, 2), &data);
+          if (rc != 0)
+          {
+            throw TransportException("failed to initialize Winsock");
+          }
+        }
+
+        ~WinsockSession()
+        {
+          ::WSACleanup();
+        }
+      };
+
+      static WinsockSession session;
+      static_cast<void>(session);
+    }
+#endif
+
     struct AddrInfoDeleter
     {
       void operator()(addrinfo *info) const noexcept
@@ -56,7 +90,11 @@ namespace vix::requests::transport
           << ':'
           << port
           << ": "
+#if defined(_WIN32)
+          << ::gai_strerrorA(errorCode);
+#else
           << ::gai_strerror(errorCode);
+#endif
 
       return oss.str();
     }
@@ -73,7 +111,7 @@ namespace vix::requests::transport
       resolved.family = info.ai_family;
       resolved.socketType = info.ai_socktype;
       resolved.protocol = info.ai_protocol;
-      resolved.addressLength = static_cast<socklen_t>(info.ai_addrlen);
+      resolved.addressLength = static_cast<SocketAddressLength>(info.ai_addrlen);
 
       if (info.ai_addr == nullptr ||
           info.ai_addrlen > sizeof(resolved.address))
@@ -158,6 +196,10 @@ namespace vix::requests::transport
       std::string_view host,
       std::uint16_t port)
   {
+#if defined(_WIN32)
+    ensure_winsock_started();
+#endif
+
     if (host.empty())
     {
       throw TransportException("cannot resolve empty host");
@@ -219,7 +261,7 @@ namespace vix::requests::transport
 
   std::string socket_address_to_ip(
       const sockaddr *address,
-      socklen_t addressLength)
+      SocketAddressLength addressLength)
   {
     if (address == nullptr || addressLength == 0)
     {

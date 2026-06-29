@@ -25,10 +25,24 @@
 #include <string_view>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <sys/socket.h>
+#endif
 
 namespace vix::requests::transport
 {
+#if defined(_WIN32)
+  using SocketAddressLength = int;
+#else
+  using SocketAddressLength = socklen_t;
+#endif
+
   /**
    * @brief Resolved socket address.
    */
@@ -57,7 +71,7 @@ namespace vix::requests::transport
     /**
      * @brief Raw socket address size.
      */
-    socklen_t addressLength = 0;
+    SocketAddressLength addressLength = 0;
 
     /**
      * @brief Human-readable resolved IP address.
@@ -172,7 +186,7 @@ namespace vix::requests::transport
    */
   [[nodiscard]] std::string socket_address_to_ip(
       const sockaddr *address,
-      socklen_t addressLength);
+      SocketAddressLength addressLength);
 
 } // namespace vix::requests::transport
 

@@ -25,17 +25,32 @@
 #include <string>
 #include <string_view>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#endif
+
 namespace vix::requests::transport
 {
   /**
    * @brief Native socket handle type.
    */
+#if defined(_WIN32)
+  using NativeSocketHandle = SOCKET;
+#else
   using NativeSocketHandle = int;
+#endif
 
   /**
    * @brief Invalid native socket handle.
    */
+#if defined(_WIN32)
+  inline constexpr NativeSocketHandle invalidSocketHandle = INVALID_SOCKET;
+#else
   inline constexpr NativeSocketHandle invalidSocketHandle = -1;
+#endif
 
   /**
    * @brief RAII TCP socket wrapper.

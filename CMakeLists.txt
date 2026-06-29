@@ -131,6 +131,10 @@ target_link_libraries(vix_requests
     OpenSSL::Crypto
 )
 
+if(WIN32)
+  target_link_libraries(vix_requests PRIVATE ws2_32)
+endif()
+
 set_target_properties(vix_requests PROPERTIES
   OUTPUT_NAME vix_requests
   VERSION ${VIX_REQUESTS_MODULE_VERSION}
