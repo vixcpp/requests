@@ -62,8 +62,9 @@ namespace vix::requests::detail
       std::string encoded;
       encoded.reserve(value.size() * 3);
 
-      for (unsigned char ch : value)
+      for (char raw_ch : value)
       {
+        const auto ch = static_cast<unsigned char>(raw_ch);
         if (is_unreserved(ch))
         {
           encoded.push_back(static_cast<char>(ch));

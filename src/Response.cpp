@@ -37,8 +37,9 @@ namespace vix::requests
 
       std::size_t result = 0;
 
-      for (unsigned char ch : value)
+      for (char raw_ch : value)
       {
+        const auto ch = static_cast<unsigned char>(raw_ch);
         if (std::isdigit(ch) == 0)
         {
           return std::nullopt;

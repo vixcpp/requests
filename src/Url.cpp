@@ -42,8 +42,9 @@ namespace vix::requests
       std::string out;
       out.reserve(value.size());
 
-      for (unsigned char ch : value)
+      for (char raw_ch : value)
       {
+        const auto ch = static_cast<unsigned char>(raw_ch);
         out.push_back(static_cast<char>(std::tolower(ch)));
       }
 
@@ -59,8 +60,9 @@ namespace vix::requests
 
       unsigned int port = 0;
 
-      for (unsigned char ch : value)
+      for (char raw_ch : value)
       {
+        const auto ch = static_cast<unsigned char>(raw_ch);
         if (std::isdigit(ch) == 0)
         {
           throw InvalidUrlException("invalid URL: port must be numeric");
@@ -100,8 +102,9 @@ namespace vix::requests
 
     [[nodiscard]] bool contains_ascii_space(std::string_view value) noexcept
     {
-      for (unsigned char ch : value)
+      for (char raw_ch : value)
       {
+        const auto ch = static_cast<unsigned char>(raw_ch);
         if (std::isspace(ch) != 0)
         {
           return true;
@@ -408,8 +411,9 @@ namespace vix::requests
       throw InvalidUrlException("invalid URL: scheme must start with a letter");
     }
 
-    for (unsigned char ch : scheme)
+    for (char raw_ch : scheme)
     {
+      const auto ch = static_cast<unsigned char>(raw_ch);
       if (!is_scheme_char(ch))
       {
         throw InvalidUrlException("invalid URL: invalid scheme");

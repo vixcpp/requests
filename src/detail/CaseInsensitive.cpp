@@ -27,8 +27,9 @@ namespace vix::requests::detail
     std::string result;
     result.reserve(value.size());
 
-    for (unsigned char ch : value)
+    for (char raw_ch : value)
     {
+      const auto ch = static_cast<unsigned char>(raw_ch);
       result.push_back(static_cast<char>(std::tolower(ch)));
     }
 
@@ -96,8 +97,9 @@ namespace vix::requests::detail
       return false;
     }
 
-    for (unsigned char ch : value)
+    for (char raw_ch : value)
     {
+      const auto ch = static_cast<unsigned char>(raw_ch);
       if (!is_http_token_char(ch))
       {
         return false;

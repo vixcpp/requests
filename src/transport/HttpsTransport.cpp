@@ -200,8 +200,9 @@ namespace vix::requests::transport
           return false;
         }
 
-        for (unsigned char ch : sizeText)
+        for (char raw_ch : sizeText)
         {
+          const auto ch = static_cast<unsigned char>(raw_ch);
           unsigned int digit = 0;
 
           if (ch >= '0' && ch <= '9')

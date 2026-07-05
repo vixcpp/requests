@@ -117,8 +117,9 @@ namespace vix_examples::requests
     {
       std::string result;
       result.reserve(value.size());
-      for (unsigned char ch : value)
+      for (char raw_ch : value)
       {
+        const auto ch = static_cast<unsigned char>(raw_ch);
         result.push_back(static_cast<char>(std::tolower(ch)));
       }
       return result;
@@ -150,8 +151,9 @@ namespace vix_examples::requests
       }
 
       std::size_t value = 0;
-      for (unsigned char ch : it->second)
+      for (char raw_ch : it->second)
       {
+        const auto ch = static_cast<unsigned char>(raw_ch);
         if (std::isdigit(ch) == 0)
         {
           return 0;

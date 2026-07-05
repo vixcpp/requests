@@ -81,8 +81,9 @@ namespace vix::requests::http
 
       std::size_t result = 0;
 
-      for (unsigned char ch : value)
+      for (char raw_ch : value)
       {
+        const auto ch = static_cast<unsigned char>(raw_ch);
         unsigned int digit = 0;
 
         if (ch >= '0' && ch <= '9')
@@ -435,8 +436,9 @@ namespace vix::requests::http
 
     std::size_t result = 0;
 
-    for (unsigned char ch : trimmed)
+    for (char raw_ch : trimmed)
     {
+      const auto ch = static_cast<unsigned char>(raw_ch);
       if (std::isdigit(ch) == 0)
       {
         return std::nullopt;

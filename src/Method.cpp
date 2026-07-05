@@ -153,8 +153,9 @@ namespace vix::requests
     std::string normalized;
     normalized.reserve(value.size());
 
-    for (unsigned char ch : value)
+    for (char raw_ch : value)
     {
+      const auto ch = static_cast<unsigned char>(raw_ch);
       normalized.push_back(
           static_cast<char>(std::toupper(ch)));
     }
@@ -169,8 +170,9 @@ namespace vix::requests
       return false;
     }
 
-    for (unsigned char ch : value)
+    for (char raw_ch : value)
     {
+      const auto ch = static_cast<unsigned char>(raw_ch);
       if (!is_token_char(ch))
       {
         return false;
