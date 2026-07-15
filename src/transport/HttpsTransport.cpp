@@ -46,6 +46,8 @@ namespace vix::requests::transport
 {
   namespace
   {
+    constexpr std::size_t max_response_bytes = 16U * 1024U * 1024U;
+
     namespace core = vix::async::core;
     using tcp = asio::ip::tcp;
     using ssl_stream = asio::ssl::stream<tcp::socket>;
@@ -326,7 +328,7 @@ namespace vix::requests::transport
     [[nodiscard]] core::task<void> async_connect_tcp(
         core::io_context &ctx,
         ssl_stream &stream,
-        const Url &url,
+        Url url,
         const Timeout &timeout)
     {
       core::cancel_source source;
@@ -631,6 +633,13 @@ namespace vix::requests::transport
         if (bytes == 0U)
         {
           break;
+        }
+
+        if (data.size() > max_response_bytes - bytes)
+        {
+          source.request_cancel();
+          close_stream(stream);
+          throw TransportException("HTTPS response exceeded maximum size");
         }
 
         data.append(buffer.data(), bytes);
