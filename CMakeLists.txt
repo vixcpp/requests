@@ -92,6 +92,7 @@ set(VIX_REQUESTS_SOURCES
 
   src/transport/Resolver.cpp
   src/transport/Socket.cpp
+  src/transport/ConnectionPool.cpp
   src/transport/TcpTransport.cpp
   src/transport/HttpsTransport.cpp
   src/transport/TransportFactory.cpp

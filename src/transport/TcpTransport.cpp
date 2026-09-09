@@ -25,6 +25,7 @@
 
 #include "http/HttpParser.hpp"
 #include "http/HttpSerializer.hpp"
+#include "detail/CaseInsensitive.hpp"
 #include "transport/Resolver.hpp"
 #include "transport/Socket.hpp"
 
@@ -130,6 +131,27 @@ namespace vix::requests::transport
       return error.code() == core::cancelled_ec();
     }
 
+    [[nodiscard]] bool connection_requests_close(const Headers &headers)
+    {
+      const auto value = headers.get("Connection");
+      if (!value.has_value()) return false;
+      std::size_t start = 0;
+      while (start < value->size())
+      {
+        const std::size_t comma = value->find(',', start);
+        const std::string_view token = std::string_view(*value).substr(
+            start, comma == std::string::npos ? std::string::npos : comma - start);
+        std::size_t first = 0;
+        while (first < token.size() && (token[first] == ' ' || token[first] == '\t')) ++first;
+        std::size_t last = token.size();
+        while (last > first && (token[last - 1] == ' ' || token[last - 1] == '\t')) --last;
+        if (detail::ascii_iequals(token.substr(first, last - first), "close")) return true;
+        if (comma == std::string::npos) break;
+        start = comma + 1U;
+      }
+      return false;
+    }
+
     [[nodiscard]] bool deadline_expired(
         std::chrono::steady_clock::time_point started,
         Timeout::Duration duration)
@@ -222,6 +244,9 @@ namespace vix::requests::transport
     }
   } // namespace
 
+  TcpTransport::TcpTransport() = default;
+  TcpTransport::~TcpTransport() = default;
+
   Response TcpTransport::send(const Request &request)
   {
     if (!supports(request.final_url()))
@@ -231,93 +256,68 @@ namespace vix::requests::transport
     }
 
     const auto started = std::chrono::steady_clock::now();
-    const ResolveResult addresses = resolve_tcp(
-        request.final_url().host(),
-        request.final_url().port());
-
-    Socket socket;
-    std::exception_ptr lastError;
-
-    for (const ResolvedAddress &address : addresses)
+    reusable_ = false;
+    if (!socket_.valid())
     {
-      try
+      const ResolveResult addresses = resolve_tcp(
+          request.final_url().host(), request.final_url().port());
+      std::exception_ptr lastError;
+      for (const ResolvedAddress &address : addresses)
       {
-        Socket candidate = Socket::tcp(address.family);
-        candidate.connect(
-            &address.address,
-            address.addressLength,
-            request.options().timeout);
-        socket = std::move(candidate);
-        break;
+        try
+        {
+          Socket candidate = Socket::tcp(address.family);
+          candidate.connect(&address.address, address.addressLength,
+                            request.options().timeout);
+          socket_ = std::move(candidate);
+          break;
+        }
+        catch (...) { lastError = std::current_exception(); }
       }
-      catch (...)
+      if (!socket_.valid())
       {
-        lastError = std::current_exception();
+        if (lastError) std::rethrow_exception(lastError);
+        throw ConnectionException("failed to connect socket");
       }
     }
-
-    if (!socket.valid())
+    try
     {
-      if (lastError)
+      const http::SerializedRequest serialized = http::serialize_request(request);
+      static_cast<void>(socket_.send_all(serialized.data, request.options().timeout));
+      std::string rawResponse;
+      bool sawEof = false;
+      while (true)
       {
-        std::rethrow_exception(lastError);
+        const std::string chunk = socket_.receive(readChunkSize, request.options().timeout);
+        if (chunk.empty()) { sawEof = true; break; }
+        rawResponse += chunk;
+        if (response_complete(rawResponse, request.expects_response_body())) break;
       }
-
-      throw ConnectionException("failed to connect socket");
+      if (rawResponse.empty()) throw ConnectionException("empty HTTP response");
+      Response response = http::parse_response(rawResponse,
+          request.final_url().without_fragment(), request.expects_response_body());
+      const http::BodyInfo framing = http::detect_body_info(response.status_code(),
+          response.headers(), request.expects_response_body());
+      const bool closes = connection_requests_close(response.headers());
+      const bool http11 = rawResponse.rfind("HTTP/1.1", 0) == 0;
+      reusable_ = http11 && !sawEof && !closes && framing.framing != http::BodyFraming::ConnectionClose &&
+                  socket_.valid();
+      if (!reusable_) socket_.close();
+      const auto finished = std::chrono::steady_clock::now();
+      response.set_elapsed(std::chrono::duration_cast<Response::Duration>(finished - started));
+      return response;
     }
-
-    const http::SerializedRequest serialized =
-        http::serialize_request(request);
-
-    static_cast<void>(socket.send_all(
-        serialized.data,
-        request.options().timeout));
-
-    std::string rawResponse;
-
-    while (true)
+    catch (...)
     {
-      const std::string chunk = socket.receive(
-          readChunkSize,
-          request.options().timeout);
-
-      if (chunk.empty())
-      {
-        break;
-      }
-
-      rawResponse += chunk;
-
-      if (response_complete(rawResponse, request.expects_response_body()))
-      {
-        break;
-      }
+      socket_.close();
+      reusable_ = false;
+      throw;
     }
-
-    socket.close();
-
-    if (rawResponse.empty())
-    {
-      throw ConnectionException("empty HTTP response");
-    }
-
-    Response response = http::parse_response(
-        rawResponse,
-        request.final_url().without_fragment(),
-        request.expects_response_body());
-
-    const auto finished = std::chrono::steady_clock::now();
-
-    response.set_elapsed(
-        std::chrono::duration_cast<Response::Duration>(
-            finished - started));
-
-    return response;
   }
 
   core::task<Response> TcpTransport::async_send(
       core::io_context &ctx,
-      const Request &request)
+      Request request)
   {
     if (!supports(request.final_url()))
     {
@@ -327,45 +327,39 @@ namespace vix::requests::transport
 
     const auto started = std::chrono::steady_clock::now();
 
-    auto stream = net::make_tcp_stream(ctx);
-
-    auto connectTask = connect(
-        ctx,
-        *stream,
-        request.final_url(),
-        request.options().timeout);
-    co_await std::move(connectTask);
-
-    const http::SerializedRequest serialized =
-        http::serialize_request(request);
-
-    auto writeTask = async_write_all(
-        ctx,
-        *stream,
-        serialized.data,
-        request.options().timeout);
-    co_await std::move(writeTask);
-
-    auto readTask = read_response_bytes(
-        ctx,
-        *stream,
-        request);
-    std::string rawResponse = co_await std::move(readTask);
-
-    stream->close();
-
-    Response response = http::parse_response(
-        rawResponse,
-        request.final_url().without_fragment(),
-        request.expects_response_body());
-
-    const auto finished = std::chrono::steady_clock::now();
-
-    response.set_elapsed(
-        std::chrono::duration_cast<Response::Duration>(
-            finished - started));
-
-    co_return response;
+    reusable_ = false;
+    try
+    {
+      if (!stream_)
+      {
+        stream_ = net::make_tcp_stream(ctx);
+        asyncContext_ = &ctx;
+        auto connectTask = connect(ctx, *stream_, request.final_url(), request.options().timeout);
+        co_await std::move(connectTask);
+      }
+      else if (asyncContext_ != &ctx)
+      {
+        throw ConnectionException("TCP connection is bound to another io_context");
+      }
+      const http::SerializedRequest serialized = http::serialize_request(request);
+      auto writeTask = async_write_all(ctx, *stream_, serialized.data, request.options().timeout);
+      co_await std::move(writeTask);
+      auto readTask = read_response_bytes(ctx, *stream_, request);
+      std::string rawResponse = co_await std::move(readTask);
+      Response response = http::parse_response(rawResponse, request.final_url().without_fragment(), request.expects_response_body());
+      const http::BodyInfo framing = http::detect_body_info(response.status_code(), response.headers(), request.expects_response_body());
+      reusable_ = framing.framing != http::BodyFraming::ConnectionClose &&
+          !connection_requests_close(response.headers());
+      if (!reusable_) discard();
+      const auto finished = std::chrono::steady_clock::now();
+      response.set_elapsed(std::chrono::duration_cast<Response::Duration>(finished - started));
+      co_return response;
+    }
+    catch (...)
+    {
+      discard();
+      throw;
+    }
   }
 
   bool TcpTransport::supports(const Url &url) const noexcept
@@ -376,6 +370,22 @@ namespace vix::requests::transport
   TransportProtocol TcpTransport::protocol() const noexcept
   {
     return TransportProtocol::Http;
+  }
+
+  bool TcpTransport::reusable() const noexcept { return reusable_; }
+
+  void TcpTransport::discard() noexcept
+  {
+    reusable_ = false;
+    socket_.close();
+    if (stream_) stream_->close();
+    stream_.reset();
+    asyncContext_ = nullptr;
+  }
+
+  bool TcpTransport::async_compatible(const core::io_context &ctx) const noexcept
+  {
+    return reusable_ && stream_ && asyncContext_ == &ctx;
   }
 
   core::task<void> TcpTransport::connect(

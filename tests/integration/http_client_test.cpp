@@ -21,6 +21,7 @@
 #include <vix/requests/requests.hpp>
 #include <vix/async/core/io_context.hpp>
 #include <vix/async/core/task.hpp>
+#include <vix/async/core/when.hpp>
 
 #include "transport/TransportFactory.hpp"
 
@@ -180,6 +181,65 @@ namespace
     expect(response.text() == "async ok", "async GET body should match");
   }
 
+  vix::async::core::task<void> run_concurrent_async_gets(
+      vix::async::core::io_context &ctx,
+      const vix::requests::tests::LocalHttpServer &server,
+      std::exception_ptr &error)
+  {
+    try
+    {
+      auto responses = co_await vix::async::core::when_all(
+          ctx.get_scheduler(),
+          vix::requests::async_get(ctx, server.url("/concurrent")),
+          vix::requests::async_get(ctx, server.url("/concurrent")),
+          vix::requests::async_get(ctx, server.url("/concurrent")),
+          vix::requests::async_get(ctx, server.url("/concurrent")),
+          vix::requests::async_get(ctx, server.url("/concurrent")),
+          vix::requests::async_get(ctx, server.url("/concurrent")),
+          vix::requests::async_get(ctx, server.url("/concurrent")),
+          vix::requests::async_get(ctx, server.url("/concurrent")),
+          vix::requests::async_get(ctx, server.url("/concurrent")),
+          vix::requests::async_get(ctx, server.url("/concurrent")));
+
+      std::apply(
+          [](const auto &...response)
+          {
+            (expect(response.status_code() == 200,
+                    "concurrent async GET status should be 200"), ...);
+          },
+          responses);
+    }
+    catch (...)
+    {
+      error = std::current_exception();
+    }
+
+    ctx.stop();
+    co_return;
+  }
+
+  void test_concurrent_async_gets_own_temporary_urls()
+  {
+    vix::requests::tests::LocalHttpServer server(
+        [](const vix::requests::tests::LocalHttpRequest &request)
+        {
+          return vix::requests::tests::local_http_response(
+              request.path == "/concurrent" ? 200 : 404,
+              "concurrent ok");
+        });
+
+    vix::async::core::io_context ctx;
+    std::exception_ptr error;
+    auto app = run_concurrent_async_gets(ctx, server, error);
+    ctx.post(app.handle());
+    ctx.run();
+
+    if (error)
+    {
+      std::rethrow_exception(error);
+    }
+  }
+
   void test_post_json()
   {
     vix::requests::tests::LocalHttpServer server(
@@ -325,6 +385,7 @@ int main()
     test_simple_get();
     test_get_with_params_and_headers();
     test_async_get();
+    test_concurrent_async_gets_own_temporary_urls();
     test_post_json();
     test_post_form();
     test_head_request();

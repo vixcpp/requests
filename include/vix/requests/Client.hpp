@@ -26,7 +26,9 @@
 #include <vix/requests/Response.hpp>
 #include <vix/async/core/task.hpp>
 
+#include <string>
 #include <string_view>
+#include <memory>
 
 namespace vix::async::core
 {
@@ -35,6 +37,9 @@ namespace vix::async::core
 
 namespace vix::requests
 {
+  namespace transport { class ConnectionPool; }
+
+  namespace testing { struct ClientTestAccess; }
   /**
    * @brief Stateless HTTP client.
    *
@@ -48,7 +53,12 @@ namespace vix::requests
     /**
      * @brief Creates a client.
      */
-    Client() = default;
+    Client();
+    ~Client();
+    Client(const Client &) = default;
+    Client &operator=(const Client &) = default;
+    Client(Client &&) noexcept = default;
+    Client &operator=(Client &&) noexcept = default;
 
     /**
      * @brief Sends a prepared request.
@@ -67,7 +77,7 @@ namespace vix::requests
      */
     [[nodiscard]] vix::async::core::task<Response> async_send(
         vix::async::core::io_context &ctx,
-        const Request &request) const;
+        Request request) const;
 
     /**
      * @brief Sends a request with a known method.
@@ -174,49 +184,53 @@ namespace vix::requests
     [[nodiscard]] vix::async::core::task<Response> async_request(
         vix::async::core::io_context &ctx,
         Method method,
-        std::string_view url,
+        std::string url,
         RequestOptions options = {},
         Body body = {}) const;
 
     [[nodiscard]] vix::async::core::task<Response> async_request(
         vix::async::core::io_context &ctx,
-        std::string_view method,
-        std::string_view url,
+        std::string method,
+        std::string url,
         RequestOptions options = {},
         Body body = {}) const;
 
     [[nodiscard]] vix::async::core::task<Response> async_get(
         vix::async::core::io_context &ctx,
-        std::string_view url,
+        std::string url,
         RequestOptions options = {}) const;
 
     [[nodiscard]] vix::async::core::task<Response> async_post(
         vix::async::core::io_context &ctx,
-        std::string_view url,
+        std::string url,
         Body body = {},
         RequestOptions options = {}) const;
 
     [[nodiscard]] vix::async::core::task<Response> async_put(
         vix::async::core::io_context &ctx,
-        std::string_view url,
+        std::string url,
         Body body = {},
         RequestOptions options = {}) const;
 
     [[nodiscard]] vix::async::core::task<Response> async_patch(
         vix::async::core::io_context &ctx,
-        std::string_view url,
+        std::string url,
         Body body = {},
         RequestOptions options = {}) const;
 
     [[nodiscard]] vix::async::core::task<Response> async_del(
         vix::async::core::io_context &ctx,
-        std::string_view url,
+        std::string url,
         RequestOptions options = {}) const;
 
     [[nodiscard]] vix::async::core::task<Response> async_head(
         vix::async::core::io_context &ctx,
-        std::string_view url,
+        std::string url,
         RequestOptions options = {}) const;
+  private:
+    friend struct testing::ClientTestAccess;
+
+    std::shared_ptr<transport::ConnectionPool> pool_;
   };
 
   /**
@@ -285,48 +299,48 @@ namespace vix::requests
   [[nodiscard]] vix::async::core::task<Response> async_request(
       vix::async::core::io_context &ctx,
       Method method,
-      std::string_view url,
+      std::string url,
       RequestOptions options = {},
       Body body = {});
 
   [[nodiscard]] vix::async::core::task<Response> async_request(
       vix::async::core::io_context &ctx,
-      std::string_view method,
-      std::string_view url,
+      std::string method,
+      std::string url,
       RequestOptions options = {},
       Body body = {});
 
   [[nodiscard]] vix::async::core::task<Response> async_get(
       vix::async::core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       RequestOptions options = {});
 
   [[nodiscard]] vix::async::core::task<Response> async_post(
       vix::async::core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       Body body = {},
       RequestOptions options = {});
 
   [[nodiscard]] vix::async::core::task<Response> async_put(
       vix::async::core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       Body body = {},
       RequestOptions options = {});
 
   [[nodiscard]] vix::async::core::task<Response> async_patch(
       vix::async::core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       Body body = {},
       RequestOptions options = {});
 
   [[nodiscard]] vix::async::core::task<Response> async_del(
       vix::async::core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       RequestOptions options = {});
 
   [[nodiscard]] vix::async::core::task<Response> async_head(
       vix::async::core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       RequestOptions options = {});
 
 } // namespace vix::requests

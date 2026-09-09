@@ -24,6 +24,7 @@
 
 #include <cstddef>
 #include <string>
+#include <memory>
 
 namespace vix::async::core
 {
@@ -41,7 +42,8 @@ namespace vix::requests::transport
     /**
      * @brief Creates an HTTPS transport.
      */
-    HttpsTransport() = default;
+    HttpsTransport();
+    ~HttpsTransport() override;
 
     /**
      * @brief Sends one HTTPS request synchronously.
@@ -60,7 +62,7 @@ namespace vix::requests::transport
      */
     [[nodiscard]] vix::async::core::task<Response> async_send(
         vix::async::core::io_context &ctx,
-        const Request &request) override;
+        Request request) override;
 
     /**
      * @brief Checks whether this transport supports a URL.
@@ -76,6 +78,11 @@ namespace vix::requests::transport
      * @return HTTPS protocol.
      */
     [[nodiscard]] TransportProtocol protocol() const noexcept override;
+
+    [[nodiscard]] bool reusable() const noexcept override;
+    void discard() noexcept override;
+    [[nodiscard]] bool async_compatible(
+        const vix::async::core::io_context &ctx) const noexcept override;
 
     /**
      * @brief Checks whether enough bytes have been read for a full response.
@@ -93,6 +100,9 @@ namespace vix::requests::transport
      * @brief Default TLS stream read size.
      */
     static constexpr std::size_t readChunkSize = 16U * 1024U;
+    struct State;
+    std::unique_ptr<State> state_;
+    bool reusable_{false};
   };
 
 } // namespace vix::requests::transport

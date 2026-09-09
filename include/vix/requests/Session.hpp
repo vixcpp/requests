@@ -228,7 +228,7 @@ namespace vix::requests
      */
     [[nodiscard]] vix::async::core::task<Response> async_send(
         vix::async::core::io_context &ctx,
-        const Request &request);
+        Request request);
 
     /**
      * @brief Sends a request with a known method.
@@ -335,48 +335,48 @@ namespace vix::requests
     [[nodiscard]] vix::async::core::task<Response> async_request(
         vix::async::core::io_context &ctx,
         Method method,
-        std::string_view url,
+        std::string url,
         RequestOptions options = {},
         Body body = {});
 
     [[nodiscard]] vix::async::core::task<Response> async_request(
         vix::async::core::io_context &ctx,
-        std::string_view method,
-        std::string_view url,
+        std::string method,
+        std::string url,
         RequestOptions options = {},
         Body body = {});
 
     [[nodiscard]] vix::async::core::task<Response> async_get(
         vix::async::core::io_context &ctx,
-        std::string_view url,
+        std::string url,
         RequestOptions options = {});
 
     [[nodiscard]] vix::async::core::task<Response> async_post(
         vix::async::core::io_context &ctx,
-        std::string_view url,
+        std::string url,
         Body body = {},
         RequestOptions options = {});
 
     [[nodiscard]] vix::async::core::task<Response> async_put(
         vix::async::core::io_context &ctx,
-        std::string_view url,
+        std::string url,
         Body body = {},
         RequestOptions options = {});
 
     [[nodiscard]] vix::async::core::task<Response> async_patch(
         vix::async::core::io_context &ctx,
-        std::string_view url,
+        std::string url,
         Body body = {},
         RequestOptions options = {});
 
     [[nodiscard]] vix::async::core::task<Response> async_del(
         vix::async::core::io_context &ctx,
-        std::string_view url,
+        std::string url,
         RequestOptions options = {});
 
     [[nodiscard]] vix::async::core::task<Response> async_head(
         vix::async::core::io_context &ctx,
-        std::string_view url,
+        std::string url,
         RequestOptions options = {});
 
   private:

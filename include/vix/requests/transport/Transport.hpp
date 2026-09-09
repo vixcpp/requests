@@ -114,7 +114,7 @@ namespace vix::requests::transport
      */
     [[nodiscard]] virtual vix::async::core::task<Response> async_send(
         vix::async::core::io_context &ctx,
-        const Request &request) = 0;
+        Request request) = 0;
 
     /**
      * @brief Returns true when this transport supports a URL.
@@ -130,6 +130,18 @@ namespace vix::requests::transport
      * @return Transport protocol.
      */
     [[nodiscard]] virtual TransportProtocol protocol() const noexcept = 0;
+
+    /**
+     * @brief Whether the last completed exchange left a safe idle connection.
+     */
+    [[nodiscard]] virtual bool reusable() const noexcept = 0;
+
+    /** @brief Closes and invalidates the underlying connection. */
+    virtual void discard() noexcept = 0;
+
+    /** A retained async transport is bound to its originating I/O context. */
+    [[nodiscard]] virtual bool async_compatible(
+        const vix::async::core::io_context &) const noexcept { return false; }
 
   protected:
     /**

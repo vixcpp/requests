@@ -128,4 +128,9 @@ vix_requests_add_test(
   "${CMAKE_CURRENT_SOURCE_DIR}/integration/timeout_test.cpp"
 )
 
+vix_requests_add_test(
+  connection_lifecycle_test
+  "${CMAKE_CURRENT_SOURCE_DIR}/integration/connection_lifecycle_test.cpp"
+)
+
 message(STATUS "[requests/tests] Configured Vix Requests tests.")

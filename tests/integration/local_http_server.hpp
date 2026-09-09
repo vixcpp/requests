@@ -112,6 +112,19 @@ namespace vix::requests::tests
     return out.str();
   }
 
+  inline std::string local_http_response_keep_alive(
+      int statusCode,
+      std::string body = {},
+      std::string contentType = "text/plain")
+  {
+    std::ostringstream out;
+    out << "HTTP/1.1 " << statusCode << ' ' << local_http_reason_phrase(statusCode)
+        << "\r\nContent-Type: " << contentType
+        << "\r\nContent-Length: " << body.size()
+        << "\r\nConnection: keep-alive\r\n\r\n" << body;
+    return out.str();
+  }
+
   inline std::string local_http_redirect(std::string location)
   {
     return local_http_response(
@@ -148,6 +161,11 @@ namespace vix::requests::tests
       return port_;
     }
 
+    [[nodiscard]] std::size_t connections_accepted() const noexcept
+    {
+      return connectionsAccepted_.load();
+    }
+
     [[nodiscard]] std::string url(std::string_view path = "/") const
     {
       std::string value = "http://127.0.0.1:";
@@ -182,6 +200,7 @@ namespace vix::requests::tests
     int serverFd_{-1};
     std::uint16_t port_{0};
     std::thread thread_;
+    std::atomic_size_t connectionsAccepted_{0};
 
     static std::string lowercase(std::string_view value)
     {
@@ -468,13 +487,20 @@ namespace vix::requests::tests
           break;
         }
 
+        connectionsAccepted_.fetch_add(1);
+
         try
         {
-          const std::string raw = read_request(clientFd);
-          const LocalHttpRequest request = parse_request(raw);
-          const std::string response = handler_(request);
-
-          send_all(clientFd, response);
+          while (running_)
+          {
+            const std::string raw = read_request(clientFd);
+            if (raw.empty()) break;
+            const LocalHttpRequest request = parse_request(raw);
+            const std::string response = handler_(request);
+            send_all(clientFd, response);
+            if (response.find("Connection: close") != std::string::npos ||
+                response.find("X-Local-Test-Close-After-Response: 1") != std::string::npos) break;
+          }
         }
         catch (...)
         {

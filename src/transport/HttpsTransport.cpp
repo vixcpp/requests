@@ -25,6 +25,7 @@
 
 #include "http/HttpParser.hpp"
 #include "http/HttpSerializer.hpp"
+#include "detail/CaseInsensitive.hpp"
 
 #include <asio/connect.hpp>
 #include <asio/ip/tcp.hpp>
@@ -661,6 +662,18 @@ namespace vix::requests::transport
     }
   } // namespace
 
+  struct HttpsTransport::State
+  {
+    vix::async::core::io_context *ctx;
+    asio::ssl::context tls{asio::ssl::context::tls_client};
+    ssl_stream stream;
+
+    explicit State(vix::async::core::io_context &value)
+        : ctx(&value), stream(value.net().asio_ctx(), tls) {}
+  };
+
+  HttpsTransport::HttpsTransport() = default;
+
   Response HttpsTransport::send(const Request &request)
   {
     core::io_context ctx;
@@ -681,12 +694,14 @@ namespace vix::requests::transport
       std::rethrow_exception(error);
     }
 
+    /* The temporary synchronous io_context cannot own a retained async stream. */
+    discard();
     return response;
   }
 
   core::task<Response> HttpsTransport::async_send(
       core::io_context &ctx,
-      const Request &request)
+      Request request)
   {
     if (!supports(request.final_url()))
     {
@@ -695,56 +710,44 @@ namespace vix::requests::transport
     }
 
     const auto started = std::chrono::steady_clock::now();
+    reusable_ = false;
+    try
+    {
+      const bool fresh = !state_;
+      if (fresh)
+      {
+        state_ = std::make_unique<State>(ctx);
+        configure_tls(state_->tls, state_->stream, request);
+        auto connectTask = async_connect_tcp(ctx, state_->stream, request.final_url(), request.options().timeout);
+        co_await connectTask;
+        auto handshakeTask = async_handshake_tls(ctx, state_->stream, request.options().timeout);
+        co_await handshakeTask;
+      }
+      else if (state_->ctx != &ctx || !state_->stream.lowest_layer().is_open())
+      {
+        throw ConnectionException("TLS connection is not reusable");
+      }
 
-    asio::ssl::context tls(asio::ssl::context::tls_client);
-    ssl_stream stream(ctx.net().asio_ctx(), tls);
-
-    configure_tls(tls, stream, request);
-
-    auto connectTask = async_connect_tcp(
-        ctx,
-        stream,
-        request.final_url(),
-        request.options().timeout);
-    co_await connectTask;
-
-    auto handshakeTask = async_handshake_tls(
-        ctx,
-        stream,
-        request.options().timeout);
-    co_await handshakeTask;
-
-    const http::SerializedRequest serialized =
-        http::serialize_request(request);
-
-    auto writeTask = async_write_all(
-        ctx,
-        stream,
-        serialized.data,
-        request.options().timeout);
-    co_await writeTask;
-
-    auto readTask = async_read_response_bytes(
-        *this,
-        ctx,
-        stream,
-        request);
-    std::string rawResponse = co_await std::move(readTask);
-
-    close_stream(stream);
-
-    Response response = http::parse_response(
-        rawResponse,
-        request.final_url().without_fragment(),
-        request.expects_response_body());
-
-    const auto finished = std::chrono::steady_clock::now();
-
-    response.set_elapsed(
-        std::chrono::duration_cast<Response::Duration>(
-            finished - started));
-
-    co_return response;
+      const http::SerializedRequest serialized = http::serialize_request(request);
+      auto writeTask = async_write_all(ctx, state_->stream, serialized.data, request.options().timeout);
+      co_await writeTask;
+      auto readTask = async_read_response_bytes(*this, ctx, state_->stream, request);
+      std::string rawResponse = co_await std::move(readTask);
+      Response response = http::parse_response(rawResponse, request.final_url().without_fragment(), request.expects_response_body());
+      const http::BodyInfo framing = http::detect_body_info(response.status_code(), response.headers(), request.expects_response_body());
+      const auto connection = response.headers().get("Connection");
+      const bool closes = connection.has_value() && detail::ascii_iequals(*connection, "close");
+      reusable_ = !closes && framing.framing != http::BodyFraming::ConnectionClose && state_->stream.lowest_layer().is_open();
+      if (!reusable_) discard();
+      const auto finished = std::chrono::steady_clock::now();
+      response.set_elapsed(std::chrono::duration_cast<Response::Duration>(finished - started));
+      co_return response;
+    }
+    catch (...)
+    {
+      discard();
+      throw;
+    }
   }
 
   bool HttpsTransport::supports(const Url &url) const noexcept
@@ -755,6 +758,25 @@ namespace vix::requests::transport
   TransportProtocol HttpsTransport::protocol() const noexcept
   {
     return TransportProtocol::Https;
+  }
+
+  HttpsTransport::~HttpsTransport() = default;
+
+  bool HttpsTransport::reusable() const noexcept
+  {
+    return reusable_ && state_ && state_->stream.lowest_layer().is_open();
+  }
+
+  void HttpsTransport::discard() noexcept
+  {
+    reusable_ = false;
+    if (state_) close_stream(state_->stream);
+    state_.reset();
+  }
+
+  bool HttpsTransport::async_compatible(const core::io_context &ctx) const noexcept
+  {
+    return state_ && state_->ctx == &ctx && reusable();
   }
 
   bool HttpsTransport::response_complete(

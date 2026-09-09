@@ -24,6 +24,8 @@
 #include <vix/async/core/task.hpp>
 
 #include <cstddef>
+#include <memory>
+#include "transport/Socket.hpp"
 #include <string>
 
 namespace vix::async::core
@@ -50,7 +52,8 @@ namespace vix::requests::transport
     /**
      * @brief Creates a TCP transport.
      */
-    TcpTransport() = default;
+    TcpTransport();
+    ~TcpTransport() override;
 
     /**
      * @brief Sends one HTTP request through a TCP socket.
@@ -69,7 +72,7 @@ namespace vix::requests::transport
      */
     [[nodiscard]] vix::async::core::task<Response> async_send(
         vix::async::core::io_context &ctx,
-        const Request &request) override;
+        Request request) override;
 
     /**
      * @brief Checks whether this transport supports a URL.
@@ -86,11 +89,21 @@ namespace vix::requests::transport
      */
     [[nodiscard]] TransportProtocol protocol() const noexcept override;
 
+    [[nodiscard]] bool reusable() const noexcept override;
+    void discard() noexcept override;
+    [[nodiscard]] bool async_compatible(
+        const vix::async::core::io_context &ctx) const noexcept override;
+
   private:
     /**
      * @brief Default socket read size.
      */
     static constexpr std::size_t readChunkSize = 16U * 1024U;
+
+    Socket socket_;
+    std::unique_ptr<vix::async::net::tcp_stream> stream_;
+    const vix::async::core::io_context *asyncContext_{nullptr};
+    bool reusable_{false};
 
     /**
      * @brief Opens a socket connected to the request URL.

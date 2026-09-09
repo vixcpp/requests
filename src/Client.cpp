@@ -22,6 +22,7 @@
 
 #include "http/RedirectPolicy.hpp"
 #include "transport/TransportFactory.hpp"
+#include "transport/ConnectionPool.hpp"
 
 #include <exception>
 #include <utility>
@@ -32,15 +33,46 @@ namespace vix::requests
   {
     namespace core = vix::async::core;
 
-    [[nodiscard]] Response send_once(const Request &request)
+    [[nodiscard]] Response send_once(const Request &request, transport::ConnectionPool &pool)
     {
-      auto transport =
-          transport::make_transport_for_url(request.final_url());
+      const Url url = request.final_url();
+      auto acquired = pool.acquire(url);
+      try { Response response = acquired.transport->send(request); pool.release(url, std::move(acquired.transport)); return response; }
+      catch (...)
+      {
+        const bool retry = acquired.reused &&
+            (request.method() == "GET" || request.method() == "HEAD" || request.method() == "OPTIONS");
+        pool.discard(std::move(acquired.transport));
+        if (!retry) throw;
+        auto fresh = pool.acquire(url);
+        try { Response response = fresh.transport->send(request); pool.release(url, std::move(fresh.transport)); return response; }
+        catch (...) { pool.discard(std::move(fresh.transport)); throw; }
+      }
+    }
 
-      return transport->send(request);
+    [[nodiscard]] core::task<Response> async_send_once(
+        core::io_context &ctx,
+        Request request, transport::ConnectionPool &pool)
+    {
+      const Url url = request.final_url();
+      auto acquired = pool.acquire_async(url, ctx);
+      try { Response response = co_await acquired.transport->async_send(ctx, request); pool.release(url, std::move(acquired.transport)); co_return response; }
+      catch (...)
+      {
+        const bool retry = acquired.reused &&
+            (request.method() == "GET" || request.method() == "HEAD" || request.method() == "OPTIONS");
+        pool.discard(std::move(acquired.transport));
+        if (!retry) throw;
+      }
+      auto fresh = pool.acquire_async(url, ctx);
+      try { Response response = co_await fresh.transport->async_send(ctx, std::move(request)); pool.release(url, std::move(fresh.transport)); co_return response; }
+      catch (...) { pool.discard(std::move(fresh.transport)); throw; }
     }
 
   } // namespace
+
+  Client::Client() : pool_(std::make_shared<transport::ConnectionPool>()) {}
+  Client::~Client() = default;
 
   Response Client::send(const Request &request) const
   {
@@ -59,7 +91,7 @@ namespace vix::requests
 
       history.add(currentUrl);
 
-      Response response = send_once(current);
+      Response response = send_once(current, *pool_);
 
       const http::RedirectDecision decision =
           http::decide_redirect(
@@ -77,10 +109,35 @@ namespace vix::requests
   }
 
   core::task<Response> Client::async_send(
-      core::io_context &,
-      const Request &request) const
+      core::io_context &ctx,
+      Request request) const
   {
-    co_return send(request);
+    http::RedirectHistory history;
+    Request current = std::move(request);
+
+    while (true)
+    {
+      const std::string currentUrl =
+          current.final_url().without_fragment();
+
+      if (history.contains(currentUrl))
+      {
+        throw TooManyRedirectsException("redirect loop detected");
+      }
+
+      history.add(currentUrl);
+
+      Response response = co_await async_send_once(ctx, current, *pool_);
+      const http::RedirectDecision decision =
+          http::decide_redirect(current, response, history);
+
+      if (!decision.follow)
+      {
+        co_return response;
+      }
+
+      current = http::make_redirect_request(current, decision);
+    }
   }
 
   Response Client::request(
@@ -178,7 +235,7 @@ namespace vix::requests
   core::task<Response> Client::async_request(
       core::io_context &ctx,
       Method method,
-      std::string_view url,
+      std::string url,
       RequestOptions options,
       Body body) const
   {
@@ -191,8 +248,8 @@ namespace vix::requests
 
   core::task<Response> Client::async_request(
       core::io_context &ctx,
-      std::string_view method,
-      std::string_view url,
+      std::string method,
+      std::string url,
       RequestOptions options,
       Body body) const
   {
@@ -205,7 +262,7 @@ namespace vix::requests
 
   core::task<Response> Client::async_get(
       core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       RequestOptions options) const
   {
     auto pending = async_request(ctx, Method::Get, url, std::move(options));
@@ -214,7 +271,7 @@ namespace vix::requests
 
   core::task<Response> Client::async_post(
       core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       Body body,
       RequestOptions options) const
   {
@@ -229,7 +286,7 @@ namespace vix::requests
 
   core::task<Response> Client::async_put(
       core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       Body body,
       RequestOptions options) const
   {
@@ -244,7 +301,7 @@ namespace vix::requests
 
   core::task<Response> Client::async_patch(
       core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       Body body,
       RequestOptions options) const
   {
@@ -259,7 +316,7 @@ namespace vix::requests
 
   core::task<Response> Client::async_del(
       core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       RequestOptions options) const
   {
     auto pending = async_request(ctx, Method::Delete, url, std::move(options));
@@ -268,7 +325,7 @@ namespace vix::requests
 
   core::task<Response> Client::async_head(
       core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       RequestOptions options) const
   {
     auto pending = async_request(ctx, Method::Head, url, std::move(options));
@@ -364,7 +421,7 @@ namespace vix::requests
   core::task<Response> async_request(
       core::io_context &ctx,
       Method method,
-      std::string_view url,
+      std::string url,
       RequestOptions options,
       Body body)
   {
@@ -380,8 +437,8 @@ namespace vix::requests
 
   core::task<Response> async_request(
       core::io_context &ctx,
-      std::string_view method,
-      std::string_view url,
+      std::string method,
+      std::string url,
       RequestOptions options,
       Body body)
   {
@@ -397,7 +454,7 @@ namespace vix::requests
 
   core::task<Response> async_get(
       core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       RequestOptions options)
   {
     Client client;
@@ -407,7 +464,7 @@ namespace vix::requests
 
   core::task<Response> async_post(
       core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       Body body,
       RequestOptions options)
   {
@@ -422,7 +479,7 @@ namespace vix::requests
 
   core::task<Response> async_put(
       core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       Body body,
       RequestOptions options)
   {
@@ -437,7 +494,7 @@ namespace vix::requests
 
   core::task<Response> async_patch(
       core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       Body body,
       RequestOptions options)
   {
@@ -452,7 +509,7 @@ namespace vix::requests
 
   core::task<Response> async_del(
       core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       RequestOptions options)
   {
     Client client;
@@ -462,7 +519,7 @@ namespace vix::requests
 
   core::task<Response> async_head(
       core::io_context &ctx,
-      std::string_view url,
+      std::string url,
       RequestOptions options)
   {
     Client client;
