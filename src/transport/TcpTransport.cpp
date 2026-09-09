@@ -391,7 +391,7 @@ namespace vix::requests::transport
   core::task<void> TcpTransport::connect(
       core::io_context &ctx,
       net::tcp_stream &stream,
-      const Url &url,
+      Url url,
       const Timeout &timeout) const
   {
     core::cancel_source source;

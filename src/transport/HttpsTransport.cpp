@@ -665,11 +665,13 @@ namespace vix::requests::transport
   struct HttpsTransport::State
   {
     vix::async::core::io_context *ctx;
+    // Keep Asio alive while a pooled TLS stream still owns an executor.
+    std::shared_ptr<vix::async::net::detail::asio_net_service> net;
     asio::ssl::context tls{asio::ssl::context::tls_client};
     ssl_stream stream;
 
     explicit State(vix::async::core::io_context &value)
-        : ctx(&value), stream(value.net().asio_ctx(), tls) {}
+        : ctx(&value), net(value.net_shared()), stream(net->asio_ctx(), tls) {}
   };
 
   HttpsTransport::HttpsTransport() = default;

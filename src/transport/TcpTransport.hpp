@@ -115,7 +115,7 @@ namespace vix::requests::transport
     [[nodiscard]] vix::async::core::task<void> connect(
         vix::async::core::io_context &ctx,
         vix::async::net::tcp_stream &stream,
-        const Url &url,
+        Url url,
         const Timeout &timeout) const;
 
     /**
