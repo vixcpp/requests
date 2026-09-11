@@ -405,8 +405,9 @@ namespace vix::requests::transport
     try
     {
       const auto started = std::chrono::steady_clock::now();
+      const net::tcp_endpoint endpoint{url.host(), url.port()};
       auto connectTask = stream.async_connect(
-          net::tcp_endpoint{url.host(), url.port()},
+          endpoint,
           useTimeout ? source.token() : core::cancel_token{});
       co_await std::move(connectTask);
 
