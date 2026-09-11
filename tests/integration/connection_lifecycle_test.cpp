@@ -25,6 +25,11 @@
 
 namespace
 {
+  // Test-only TLS fixture.
+  //
+  // This certificate and private key are intentionally embedded and public.
+  // They are used only by the local HTTPS integration test server bound to
+  // 127.0.0.1 and are not credentials for any production or external system.
   constexpr char certificate[] = R"(-----BEGIN CERTIFICATE-----
 MIIDCTCCAfGgAwIBAgIUfxB0rQw69Ldycmh/2VoK8u9ELwIwDQYJKoZIhvcNAQEL
 BQAwFDESMBAGA1UEAwwJMTI3LjAuMC4xMB4XDTI2MDkwOTEyMTMwNVoXDTI2MDkx
