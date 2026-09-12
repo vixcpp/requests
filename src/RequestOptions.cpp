@@ -42,6 +42,11 @@ namespace vix::requests
     return host_override.has_value() && !host_override->empty();
   }
 
+  bool RequestOptions::has_body_sink() const noexcept
+  {
+    return static_cast<bool>(body_sink);
+  }
+
   RequestOptions &RequestOptions::set_basic_auth(
       std::string username,
       std::string password)
@@ -114,6 +119,11 @@ namespace vix::requests
     if (overrideOptions.host_override.has_value())
     {
       merged.host_override = overrideOptions.host_override;
+    }
+
+    if (overrideOptions.body_sink)
+    {
+      merged.body_sink = overrideOptions.body_sink;
     }
 
     return merged;

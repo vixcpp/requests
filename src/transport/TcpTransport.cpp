@@ -284,6 +284,36 @@ namespace vix::requests::transport
     {
       const http::SerializedRequest serialized = http::serialize_request(request);
       static_cast<void>(socket_.send_all(serialized.data, request.options().timeout));
+      if (request.options().has_body_sink())
+      {
+        http::ResponseStreamDecoder decoder(
+            request.final_url().without_fragment(),
+            request.expects_response_body(),
+            request.options());
+        bool sawEof = false;
+        while (!decoder.complete())
+        {
+          const std::string chunk = socket_.receive(
+              readChunkSize, request.options().timeout);
+          if (chunk.empty())
+          {
+            sawEof = true;
+            break;
+          }
+          decoder.feed(std::span<const std::byte>(
+              reinterpret_cast<const std::byte *>(chunk.data()), chunk.size()));
+        }
+        Response response = decoder.finish(sawEof);
+        const http::BodyInfo framing = http::detect_body_info(
+            response.status_code(), response.headers(), request.expects_response_body());
+        const bool closes = connection_requests_close(response.headers());
+        reusable_ = decoder.is_http11() && !sawEof && !closes &&
+            framing.framing != http::BodyFraming::ConnectionClose && socket_.valid();
+        if (!reusable_) socket_.close();
+        const auto finished = std::chrono::steady_clock::now();
+        response.set_elapsed(std::chrono::duration_cast<Response::Duration>(finished - started));
+        return response;
+      }
       std::string rawResponse;
       bool sawEof = false;
       while (true)
@@ -344,9 +374,18 @@ namespace vix::requests::transport
       const http::SerializedRequest serialized = http::serialize_request(request);
       auto writeTask = async_write_all(ctx, *stream_, serialized.data, request.options().timeout);
       co_await std::move(writeTask);
-      auto readTask = read_response_bytes(ctx, *stream_, request);
-      std::string rawResponse = co_await std::move(readTask);
-      Response response = http::parse_response(rawResponse, request.final_url().without_fragment(), request.expects_response_body());
+      Response response;
+      if (request.options().has_body_sink())
+      {
+        auto readTask = read_streamed_response(ctx, *stream_, request);
+        response = co_await std::move(readTask);
+      }
+      else
+      {
+        auto readTask = read_response_bytes(ctx, *stream_, request);
+        std::string rawResponse = co_await std::move(readTask);
+        response = http::parse_response(rawResponse, request.final_url().without_fragment(), request.expects_response_body());
+      }
       const http::BodyInfo framing = http::detect_body_info(response.status_code(), response.headers(), request.expects_response_body());
       reusable_ = framing.framing != http::BodyFraming::ConnectionClose &&
           !connection_requests_close(response.headers());
@@ -509,6 +548,58 @@ namespace vix::requests::transport
     }
 
     co_return data;
+  }
+
+  core::task<Response> TcpTransport::read_streamed_response(
+      core::io_context &ctx,
+      net::tcp_stream &stream,
+      const Request &request) const
+  {
+    http::ResponseStreamDecoder decoder(
+        request.final_url().without_fragment(),
+        request.expects_response_body(),
+        request.options());
+    std::array<std::byte, readChunkSize> buffer{};
+    core::cancel_source source;
+    const bool useTimeout = request.options().timeout.has_read();
+    bool sawEof = false;
+
+    if (useTimeout)
+    {
+      schedule_timeout(ctx, stream, request.options().timeout.read(), source);
+    }
+
+    while (!decoder.complete())
+    {
+      std::size_t bytes = 0;
+      try
+      {
+        auto readSomeTask = stream.async_read(
+            std::span<std::byte>(buffer.data(), buffer.size()),
+            useTimeout ? source.token() : core::cancel_token{});
+        bytes = co_await std::move(readSomeTask);
+      }
+      catch (const std::system_error &error)
+      {
+        const bool timedOut = useTimeout && source.is_cancelled();
+        source.request_cancel();
+        if (timedOut || is_cancelled_error(error))
+        {
+          throw TimeoutException("request read timed out");
+        }
+        co_return decoder.finish(true);
+      }
+
+      if (bytes == 0U)
+      {
+        sawEof = true;
+        break;
+      }
+      decoder.feed(std::span<const std::byte>(buffer.data(), bytes));
+    }
+
+    source.request_cancel();
+    co_return decoder.finish(sawEof);
   }
 
   bool TcpTransport::response_complete(

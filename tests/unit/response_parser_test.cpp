@@ -23,9 +23,12 @@
 #include <vix/requests/Response.hpp>
 
 #include <iostream>
+#include <cstddef>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -292,6 +295,117 @@ namespace
         },
         "invalid chunk size should throw");
   }
+
+  void test_streamed_content_length_response()
+  {
+    std::string received;
+    vix::requests::RequestOptions options;
+    options.body_sink = [&received](std::span<const std::byte> bytes)
+    {
+      received.append(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+    };
+
+    vix::requests::http::ResponseStreamDecoder decoder(
+        "http://example.com/", true, options);
+    const std::string first =
+        "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nHe";
+    const std::string second = "llo";
+    decoder.feed(std::span<const std::byte>(
+        reinterpret_cast<const std::byte *>(first.data()), first.size()));
+    decoder.feed(std::span<const std::byte>(
+        reinterpret_cast<const std::byte *>(second.data()), second.size()));
+
+    const auto response = decoder.finish(false);
+    expect(received == "Hello", "sink should receive Content-Length body");
+    expect(response.empty(), "streamed response body should remain empty");
+    expect(response.content_length() == 5U, "metadata should remain available");
+  }
+
+  void test_streamed_chunked_binary_response()
+  {
+    std::vector<std::byte> received;
+    vix::requests::RequestOptions options;
+    options.body_sink = [&received](std::span<const std::byte> bytes)
+    {
+      received.insert(received.end(), bytes.begin(), bytes.end());
+    };
+
+    vix::requests::http::ResponseStreamDecoder decoder(
+        "http://example.com/", true, options);
+    std::string raw =
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\n";
+    raw.append("A\0B", 3U);
+    raw += "\r\n0\r\n\r\n";
+    decoder.feed(std::span<const std::byte>(
+        reinterpret_cast<const std::byte *>(raw.data()), raw.size()));
+
+    const auto response = decoder.finish(false);
+    expect(received.size() == 3U, "sink should receive decoded binary bytes");
+    expect(received[1] == std::byte{0}, "sink should preserve NUL bytes");
+    expect(response.empty(), "chunked streamed response should remain empty");
+  }
+
+  void test_streamed_sink_exception_propagates()
+  {
+    vix::requests::RequestOptions options;
+    options.body_sink = [](std::span<const std::byte>)
+    {
+      throw std::runtime_error("sink failure");
+    };
+
+    vix::requests::http::ResponseStreamDecoder decoder(
+        "http://example.com/", true, options);
+    const std::string raw =
+        "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\nx";
+    expect_throw<std::runtime_error>(
+        [&]
+        {
+          decoder.feed(std::span<const std::byte>(
+              reinterpret_cast<const std::byte *>(raw.data()), raw.size()));
+        },
+        "sink exceptions should propagate");
+  }
+
+  void test_streamed_connection_close_response()
+  {
+    std::string received;
+    vix::requests::RequestOptions options;
+    options.body_sink = [&received](std::span<const std::byte> bytes)
+    {
+      received.append(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+    };
+
+    vix::requests::http::ResponseStreamDecoder decoder(
+        "http://example.com/", true, options);
+    const std::string raw = "HTTP/1.0 200 OK\r\n\r\nby close";
+    decoder.feed(std::span<const std::byte>(
+        reinterpret_cast<const std::byte *>(raw.data()), raw.size()));
+
+    const auto response = decoder.finish(true);
+    expect(received == "by close", "sink should receive EOF-delimited body");
+    expect(response.empty(), "EOF streamed response body should remain empty");
+  }
+
+  void test_streamed_redirect_body_is_not_delivered()
+  {
+    std::string received;
+    vix::requests::RequestOptions options;
+    options.body_sink = [&received](std::span<const std::byte> bytes)
+    {
+      received.append(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+    };
+
+    vix::requests::http::ResponseStreamDecoder decoder(
+        "http://example.com/", true, options);
+    const std::string raw =
+        "HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 4\r\n\r\nskip";
+    decoder.feed(std::span<const std::byte>(
+        reinterpret_cast<const std::byte *>(raw.data()), raw.size()));
+
+    const auto response = decoder.finish(false);
+    expect(received.empty(), "intermediate redirect body should not reach sink");
+    expect(response.empty(), "redirect body should not be buffered");
+  }
 }
 
 int main()
@@ -310,6 +424,11 @@ int main()
     test_detect_body_info();
     test_transfer_encoding_chunked();
     test_invalid_response_errors();
+    test_streamed_content_length_response();
+    test_streamed_chunked_binary_response();
+    test_streamed_sink_exception_propagates();
+    test_streamed_connection_close_response();
+    test_streamed_redirect_body_is_not_delivered();
 
     std::cout << "response_parser_test passed\n";
     return 0;

@@ -131,6 +131,8 @@ target_link_libraries(vix_requests
     OpenSSL::SSL
     OpenSSL::Crypto
 )
+set(VIX_REQUESTS_PACKAGE_WITH_OPENSSL ON)
+set_property(TARGET vix_requests PROPERTY VIX_REQUIRES_OPENSSL ON)
 
 if(WIN32)
   target_link_libraries(vix_requests PRIVATE ws2_32)
@@ -247,7 +249,7 @@ endif()
 # Install for Vix umbrella export
 # ============================================================================
 
-if(DEFINED VIX_UMBRELLA_BUILD AND VIX_UMBRELLA_BUILD AND VIX_ENABLE_INSTALL)
+if(DEFINED VIX_UMBRELLA_BUILD AND VIX_UMBRELLA_BUILD AND VIX_ENABLE_INSTALL AND VIX_REQUESTS_ENABLE_UMBRELLA_INSTALL)
   install(
     TARGETS vix_requests
     EXPORT VixTargets

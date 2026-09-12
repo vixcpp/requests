@@ -25,12 +25,23 @@
 #include <vix/requests/Version.hpp>
 
 #include <cstddef>
+#include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
 namespace vix::requests
 {
+  /**
+   * @brief Receives decoded response-body bytes as they arrive.
+   *
+   * A configured sink replaces Response body buffering for that request. The
+   * final Response still contains its status and headers, but has an empty
+   * body.
+   */
+  using BodySink = std::function<void(std::span<const std::byte> chunk)>;
+
   /**
    * @brief Basic authentication credentials.
    */
@@ -120,6 +131,14 @@ namespace vix::requests
     std::optional<std::string> host_override;
 
     /**
+     * @brief Optional incremental consumer for decoded response-body bytes.
+     *
+     * When set, response bodies are delivered to this callback instead of
+     * being accumulated in the returned Response.
+     */
+    BodySink body_sink;
+
+    /**
      * @brief Checks whether redirects are enabled.
      *
      * @return True when redirects are enabled and max_redirects is not zero.
@@ -139,6 +158,11 @@ namespace vix::requests
      * @return True when host_override has a value.
      */
     [[nodiscard]] bool has_host_override() const noexcept;
+
+    /**
+     * @brief Checks whether response-body streaming is configured.
+     */
+    [[nodiscard]] bool has_body_sink() const noexcept;
 
     /**
      * @brief Sets basic authentication.

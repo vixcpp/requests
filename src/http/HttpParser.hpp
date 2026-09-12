@@ -20,10 +20,12 @@
 #define VIX_REQUESTS_HTTP_HTTP_PARSER_HPP
 
 #include <vix/requests/Headers.hpp>
+#include <vix/requests/RequestOptions.hpp>
 #include <vix/requests/Response.hpp>
 
 #include <cstddef>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -85,6 +87,51 @@ namespace vix::requests::http
      * @brief Content-Length value when framing is ContentLength.
      */
     std::size_t contentLength = 0;
+  };
+
+  /**
+   * @brief Incrementally parses one HTTP response for a RequestOptions sink.
+   *
+   * This is an internal transport helper. It accepts raw transport bytes and
+   * invokes the configured body sink only with decoded body bytes.
+   */
+  class ResponseStreamDecoder
+  {
+  public:
+    ResponseStreamDecoder(
+        std::string finalUrl,
+        bool expectBody,
+        const RequestOptions &options);
+
+    void feed(std::span<const std::byte> bytes);
+    [[nodiscard]] bool complete() const noexcept;
+    [[nodiscard]] bool is_http11() const noexcept;
+    [[nodiscard]] Response finish(bool reachedEof);
+
+  private:
+    enum class ChunkState
+    {
+      Size,
+      Data,
+      DataTerminator,
+      Trailers
+    };
+
+    void consume();
+    void emit(std::string_view bytes);
+
+    std::string finalUrl_;
+    bool expectBody_{true};
+    const RequestOptions &options_;
+    std::string pending_;
+    Response response_;
+    BodyInfo bodyInfo_;
+    ChunkState chunkState_{ChunkState::Size};
+    std::size_t remaining_{0};
+    bool headersParsed_{false};
+    bool http11_{false};
+    bool complete_{false};
+    bool discardRedirectBody_{false};
   };
 
   /**

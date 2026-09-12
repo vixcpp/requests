@@ -130,6 +130,11 @@ namespace vix::requests::transport
         vix::async::net::tcp_stream &stream,
         const Request &request) const;
 
+    [[nodiscard]] vix::async::core::task<Response> read_streamed_response(
+        vix::async::core::io_context &ctx,
+        vix::async::net::tcp_stream &stream,
+        const Request &request) const;
+
     /**
      * @brief Checks whether enough bytes have been read for a full response.
      *

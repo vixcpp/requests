@@ -20,9 +20,11 @@
 #include <vix/requests/Error.hpp>
 #include "detail/CaseInsensitive.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <limits>
 #include <sstream>
+#include <utility>
 
 namespace vix::requests::http
 {
@@ -422,6 +424,247 @@ namespace vix::requests::http
     }
 
     throw TransportException("invalid HTTP response: missing final chunk");
+  }
+
+  ResponseStreamDecoder::ResponseStreamDecoder(
+      std::string finalUrl,
+      bool expectBody,
+      const RequestOptions &options)
+      : finalUrl_(std::move(finalUrl)),
+        expectBody_(expectBody),
+        options_(options)
+  {
+  }
+
+  void ResponseStreamDecoder::feed(std::span<const std::byte> bytes)
+  {
+    const auto *chars = reinterpret_cast<const char *>(bytes.data());
+    pending_.append(chars, bytes.size());
+    consume();
+  }
+
+  bool ResponseStreamDecoder::complete() const noexcept
+  {
+    return complete_;
+  }
+
+  bool ResponseStreamDecoder::is_http11() const noexcept
+  {
+    return http11_;
+  }
+
+  Response ResponseStreamDecoder::finish(bool reachedEof)
+  {
+    if (!headersParsed_)
+    {
+      throw ConnectionException("empty HTTP response");
+    }
+
+    if (bodyInfo_.framing == BodyFraming::ConnectionClose)
+    {
+      complete_ = reachedEof;
+    }
+
+    if (!complete_)
+    {
+      throw TransportException("invalid HTTP response: incomplete body");
+    }
+
+    return std::move(response_);
+  }
+
+  void ResponseStreamDecoder::emit(std::string_view bytes)
+  {
+    if (bytes.empty())
+    {
+      return;
+    }
+
+    if (discardRedirectBody_)
+    {
+      return;
+    }
+
+    options_.body_sink(std::span<const std::byte>(
+        reinterpret_cast<const std::byte *>(bytes.data()), bytes.size()));
+  }
+
+  void ResponseStreamDecoder::consume()
+  {
+    while (!complete_)
+    {
+      if (!headersParsed_)
+      {
+        const auto headerEnd = find_header_end(pending_);
+        if (!headerEnd.has_value())
+        {
+          return;
+        }
+
+        const ParsedResponseHead head = parse_response_head(pending_);
+        pending_.erase(0, head.headerSize);
+
+        if (is_interim_status(head.statusCode))
+        {
+          continue;
+        }
+
+        response_ = Response(
+            finalUrl_, head.statusCode, head.reason, head.headers, {});
+        http11_ = head.version == "HTTP/1.1";
+        bodyInfo_ = detect_body_info(
+            head.statusCode, head.headers, expectBody_);
+        headersParsed_ = true;
+
+        /* Client follows this redirect after the response body is consumed. */
+        discardRedirectBody_ = options_.redirects_enabled() &&
+            response_.is_redirect() && response_.location().has_value() &&
+            !response_.location()->empty();
+
+        if (bodyInfo_.framing == BodyFraming::None)
+        {
+          complete_ = true;
+        }
+        continue;
+      }
+
+      switch (bodyInfo_.framing)
+      {
+      case BodyFraming::None:
+        complete_ = true;
+        return;
+
+      case BodyFraming::ContentLength:
+      {
+        if (remaining_ == 0U)
+        {
+          remaining_ = bodyInfo_.contentLength;
+        }
+
+        const std::size_t count = std::min(remaining_, pending_.size());
+        if (count == 0U)
+        {
+          return;
+        }
+
+        emit(std::string_view(pending_).substr(0, count));
+        pending_.erase(0, count);
+        remaining_ -= count;
+        complete_ = remaining_ == 0U;
+        continue;
+      }
+
+      case BodyFraming::ConnectionClose:
+        if (pending_.empty())
+        {
+          return;
+        }
+        emit(pending_);
+        pending_.clear();
+        return;
+
+      case BodyFraming::Chunked:
+        break;
+      }
+
+      if (chunkState_ == ChunkState::Size)
+      {
+        const std::size_t lineEnd = find_line_end(pending_, 0);
+        if (lineEnd == std::string::npos)
+        {
+          return;
+        }
+
+        const std::string sizeText = strip_chunk_extension(
+            std::string_view(pending_).substr(0, lineEnd));
+        const auto chunkSize = parse_hex_size(sizeText);
+        if (!chunkSize.has_value())
+        {
+          throw TransportException("invalid HTTP response: invalid chunk size");
+        }
+
+        pending_.erase(0, lineEnd + line_separator_size(pending_, lineEnd));
+        if (*chunkSize == 0U)
+        {
+          chunkState_ = ChunkState::Trailers;
+        }
+        else
+        {
+          remaining_ = *chunkSize;
+          chunkState_ = ChunkState::Data;
+        }
+        continue;
+      }
+
+      if (chunkState_ == ChunkState::Data)
+      {
+        const std::size_t count = std::min(remaining_, pending_.size());
+        if (count == 0U)
+        {
+          return;
+        }
+
+        emit(std::string_view(pending_).substr(0, count));
+        pending_.erase(0, count);
+        remaining_ -= count;
+        if (remaining_ == 0U)
+        {
+          chunkState_ = ChunkState::DataTerminator;
+        }
+        continue;
+      }
+
+      if (chunkState_ == ChunkState::DataTerminator)
+      {
+        if (pending_.empty())
+        {
+          return;
+        }
+
+        if (pending_.front() == '\n')
+        {
+          pending_.erase(0, 1U);
+        }
+        else if (pending_.size() >= 2U &&
+                 pending_[0] == '\r' && pending_[1] == '\n')
+        {
+          pending_.erase(0, 2U);
+        }
+        else if (pending_.front() != '\r')
+        {
+          throw TransportException("invalid HTTP response: invalid chunk terminator");
+        }
+        else
+        {
+          return;
+        }
+
+        chunkState_ = ChunkState::Size;
+        continue;
+      }
+
+      if (pending_.substr(0, 2U) == "\r\n")
+      {
+        pending_.erase(0, 2U);
+        complete_ = true;
+        return;
+      }
+      if (!pending_.empty() && pending_.front() == '\n')
+      {
+        pending_.erase(0, 1U);
+        complete_ = true;
+        return;
+      }
+
+      const auto trailerEnd = find_header_end(pending_);
+      if (!trailerEnd.has_value())
+      {
+        return;
+      }
+
+      pending_.erase(0, *trailerEnd);
+      complete_ = true;
+    }
   }
 
   std::optional<std::size_t> parse_content_length(

@@ -37,6 +37,7 @@
 #include <chrono>
 #include <exception>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -660,6 +661,71 @@ namespace vix::requests::transport
 
       co_return data;
     }
+
+    [[nodiscard]] core::task<Response> async_read_streamed_response(
+        core::io_context &ctx,
+        ssl_stream &stream,
+        const Request &request)
+    {
+      http::ResponseStreamDecoder decoder(
+          request.final_url().without_fragment(),
+          request.expects_response_body(),
+          request.options());
+      std::array<char, 16U * 1024U> buffer{};
+      core::cancel_source source;
+      const bool useTimeout = request.options().timeout.has_read();
+      bool sawEof = false;
+
+      if (useTimeout)
+      {
+        schedule_timeout(ctx, stream, request.options().timeout.read(), source);
+      }
+
+      while (!decoder.complete())
+      {
+        std::size_t bytes = 0;
+        try
+        {
+          auto readTask = co_asio_value<std::size_t>(
+              ctx,
+              useTimeout ? source.token() : core::cancel_token{},
+              [&](auto done)
+              {
+                stream.async_read_some(
+                    asio::buffer(buffer.data(), buffer.size()),
+                    [done = std::move(done)](
+                        std::error_code ec,
+                        std::size_t readBytes) mutable
+                    {
+                      done(ec, readBytes);
+                    });
+              });
+          bytes = co_await readTask;
+        }
+        catch (const std::system_error &error)
+        {
+          const bool timedOut = useTimeout && source.is_cancelled();
+          source.request_cancel();
+          if (timedOut || is_cancelled_error(error))
+          {
+            throw TimeoutException("request read timed out");
+          }
+          co_return decoder.finish(true);
+        }
+
+        if (bytes == 0U)
+        {
+          sawEof = true;
+          break;
+        }
+
+        decoder.feed(std::span<const std::byte>(
+            reinterpret_cast<const std::byte *>(buffer.data()), bytes));
+      }
+
+      source.request_cancel();
+      co_return decoder.finish(sawEof);
+    }
   } // namespace
 
   struct HttpsTransport::State
@@ -733,9 +799,18 @@ namespace vix::requests::transport
       const http::SerializedRequest serialized = http::serialize_request(request);
       auto writeTask = async_write_all(ctx, state_->stream, serialized.data, request.options().timeout);
       co_await writeTask;
-      auto readTask = async_read_response_bytes(*this, ctx, state_->stream, request);
-      std::string rawResponse = co_await std::move(readTask);
-      Response response = http::parse_response(rawResponse, request.final_url().without_fragment(), request.expects_response_body());
+      Response response;
+      if (request.options().has_body_sink())
+      {
+        auto readTask = async_read_streamed_response(ctx, state_->stream, request);
+        response = co_await std::move(readTask);
+      }
+      else
+      {
+        auto readTask = async_read_response_bytes(*this, ctx, state_->stream, request);
+        std::string rawResponse = co_await std::move(readTask);
+        response = http::parse_response(rawResponse, request.final_url().without_fragment(), request.expects_response_body());
+      }
       const http::BodyInfo framing = http::detect_body_info(response.status_code(), response.headers(), request.expects_response_body());
       const auto connection = response.headers().get("Connection");
       const bool closes = connection.has_value() && detail::ascii_iequals(*connection, "close");
